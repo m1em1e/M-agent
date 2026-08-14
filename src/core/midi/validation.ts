@@ -1,0 +1,128 @@
+import type {
+  MidiNote,
+  MidiProject,
+  MidiTrack,
+  ValidationIssue,
+  ValidationResult,
+} from "../../shared/midi.js";
+import { isPowerOfTwo } from "./project.js";
+
+export function validateNote(note: MidiNote, path = "note"): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  integerRange(issues, note.pitch, 0, 127, `${path}.pitch`, "INVALID_PITCH");
+  integerRange(
+    issues,
+    note.startTick,
+    0,
+    Number.MAX_SAFE_INTEGER,
+    `${path}.startTick`,
+    "INVALID_START_TICK",
+  );
+  integerRange(
+    issues,
+    note.durationTicks,
+    1,
+    Number.MAX_SAFE_INTEGER,
+    `${path}.durationTicks`,
+    "INVALID_DURATION",
+  );
+  integerRange(issues, note.velocity, 1, 127, `${path}.velocity`, "INVALID_VELOCITY");
+  if (typeof note.id !== "string" || note.id.length === 0) {
+    issues.push(error("INVALID_NOTE_ID", "Note ID must be a non-empty string.", `${path}.id`));
+  }
+  return issues;
+}
+
+export function validateTrack(track: MidiTrack, path = "track"): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (typeof track.id !== "string" || track.id.length === 0) {
+    issues.push(error("INVALID_TRACK_ID", "Track ID must be a non-empty string.", `${path}.id`));
+  }
+  if (typeof track.name !== "string" || track.name.trim().length === 0) {
+    issues.push(error("INVALID_TRACK_NAME", "Track name must not be empty.", `${path}.name`));
+  }
+  integerRange(issues, track.channel, 0, 15, `${path}.channel`, "INVALID_CHANNEL");
+  integerRange(issues, track.program, 0, 127, `${path}.program`, "INVALID_PROGRAM");
+  const noteIds = new Set<string>();
+  track.notes.forEach((note, index) => {
+    issues.push(...validateNote(note, `${path}.notes[${index}]`));
+    if (noteIds.has(note.id)) {
+      issues.push(
+        error(
+          "DUPLICATE_NOTE_ID",
+          `Duplicate note ID '${note.id}' in track '${track.id}'.`,
+          `${path}.notes[${index}].id`,
+        ),
+      );
+    }
+    noteIds.add(note.id);
+  });
+  return issues;
+}
+
+export function validateProject(project: MidiProject): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  if (!Number.isInteger(project.ppq) || project.ppq < 1 || project.ppq > 0x7fff) {
+    issues.push(error("INVALID_PPQ", "PPQ must be an integer between 1 and 32767.", "ppq"));
+  }
+  const trackIds = new Set<string>();
+  project.tracks.forEach((track, index) => {
+    issues.push(...validateTrack(track, `tracks[${index}]`));
+    if (trackIds.has(track.id)) {
+      issues.push(error("DUPLICATE_TRACK_ID", `Duplicate track ID '${track.id}'.`, `tracks[${index}].id`));
+    }
+    trackIds.add(track.id);
+  });
+
+  project.tempoMap.forEach((event, index) => {
+    if (!Number.isInteger(event.tick) || event.tick < 0) {
+      issues.push(error("INVALID_TEMPO_TICK", "Tempo tick must be a non-negative integer.", `tempoMap[${index}].tick`));
+    }
+    if (!Number.isFinite(event.bpm) || event.bpm <= 0 || event.bpm > 1000) {
+      issues.push(error("INVALID_TEMPO", "Tempo must be greater than 0 and at most 1000 BPM.", `tempoMap[${index}].bpm`));
+    }
+  });
+  project.timeSignatures.forEach((event, index) => {
+    if (!Number.isInteger(event.tick) || event.tick < 0) {
+      issues.push(error("INVALID_TIME_SIGNATURE_TICK", "Time-signature tick must be non-negative.", `timeSignatures[${index}].tick`));
+    }
+    if (!Number.isInteger(event.numerator) || event.numerator < 1 || event.numerator > 255) {
+      issues.push(error("INVALID_TIME_SIGNATURE", "Numerator must be between 1 and 255.", `timeSignatures[${index}].numerator`));
+    }
+    if (!isPowerOfTwo(event.denominator) || event.denominator > 128) {
+      issues.push(error("INVALID_TIME_SIGNATURE", "Denominator must be a power of two up to 128.", `timeSignatures[${index}].denominator`));
+    }
+  });
+  if (
+    project.loopRegion &&
+    (!Number.isInteger(project.loopRegion.startTick) ||
+      project.loopRegion.startTick < 0 ||
+      !Number.isInteger(project.loopRegion.endTick) ||
+      project.loopRegion.endTick <= project.loopRegion.startTick)
+  ) {
+    issues.push(error("INVALID_LOOP", "Loop end must be after a non-negative start tick.", "loopRegion"));
+  }
+
+  return {
+    valid: !issues.some((issue) => issue.severity === "error"),
+    issues,
+    affectedNotes: 0,
+  };
+}
+
+export function error(code: string, message: string, path?: string): ValidationIssue {
+  return { code, message, severity: "error", path };
+}
+
+function integerRange(
+  issues: ValidationIssue[],
+  value: number,
+  minimum: number,
+  maximum: number,
+  path: string,
+  code: string,
+): void {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    issues.push(error(code, `${path} must be an integer between ${minimum} and ${maximum}.`, path));
+  }
+}

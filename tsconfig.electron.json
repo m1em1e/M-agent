@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "outDir": "dist-electron",
+    "rootDir": "src",
+    "sourceMap": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/main/**/*.ts", "src/preload/**/*.cts", "src/shared/**/*.ts", "src/core/**/*.ts"]
+}
