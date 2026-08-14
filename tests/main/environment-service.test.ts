@@ -26,7 +26,6 @@ class TestCredentialStore implements CredentialStore {
 
 const base = {
   development: false,
-  probeCommand: async () => null,
   shellCheck: shellReady,
   piVersion: "0.84.1",
   nodeVersion: "22.21.1",
@@ -36,6 +35,7 @@ const base = {
   environmentApiKey: false,
   appCredentials: new TestCredentialStore(),
   piCredentials: new TestCredentialStore(),
+  activeSubscriptionApiKey: null,
 };
 
 describe("startup environment diagnostics", () => {
@@ -45,10 +45,10 @@ describe("startup environment diagnostics", () => {
     expect(isVersionAtLeast("24.0.0", [22, 19, 0])).toBe(true);
   });
 
-  it("does not require npm or an external Pi CLI in an installed app", async () => {
+  it("reports only runtime-relevant checks in an installed app", async () => {
     const report = await diagnoseEnvironment(base);
-    expect(report.checks.find((check) => check.id === "npm")).toMatchObject({ required: false, status: "skipped" });
-    expect(report.checks.find((check) => check.id === "pi-cli")).toMatchObject({ required: false, status: "skipped" });
+    const ids = report.checks.map((check) => check.id);
+    expect(ids).toEqual(["electron", "node", "shell", "pi-core", "secure-storage"]);
     expect(report.checks.find((check) => check.id === "pi-core")).toMatchObject({ required: true, status: "ready" });
     expect(report.issues.some((issue) => issue.id === "provider-auth")).toBe(true);
   });
@@ -61,12 +61,6 @@ describe("startup environment diagnostics", () => {
     expect(JSON.stringify(report)).not.toContain("not-returned-secret");
   });
 
-  it("makes missing npm an error only in development", async () => {
-    const report = await diagnoseEnvironment({ ...base, development: true });
-    expect(report.checks.find((check) => check.id === "npm")).toMatchObject({ required: true, status: "missing" });
-    expect(report.issues.some((issue) => issue.id === "npm")).toBe(true);
-  });
-
   it("reports an unusable configured shell as a required startup issue", async () => {
     const report = await diagnoseEnvironment({
       ...base,
@@ -74,8 +68,6 @@ describe("startup environment diagnostics", () => {
     });
     expect(report.checks.find((check) => check.id === "shell")).toMatchObject({ required: true, status: "missing" });
     expect(report.issues.find((issue) => issue.id === "shell")).toMatchObject({ action: "open-shell-settings" });
-    expect(report.checks.find((check) => check.id === "npm")).toMatchObject({ required: false, status: "skipped" });
-    expect(report.issues.some((issue) => issue.id === "npm")).toBe(false);
   });
 
   it("prefers an app subscription login over detected but unimported Pi CLI credentials", async () => {
@@ -87,5 +79,12 @@ describe("startup environment diagnostics", () => {
       piCredentials: new TestCredentialStore({ openai: { type: "api_key", key: "opaque" } }),
     });
     expect(report.activeProvider).toBe("openai-codex");
+  });
+
+  it("treats an active subscription with an API key as agent-ready", async () => {
+    const report = await diagnoseEnvironment({ ...base, activeSubscriptionApiKey: "not-returned-secret" });
+    expect(report.agentReady).toBe(true);
+    expect(report.issues.some((issue) => issue.id === "provider-auth")).toBe(false);
+    expect(JSON.stringify(report)).not.toContain("not-returned-secret");
   });
 });

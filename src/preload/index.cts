@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentRequestPayload, MagentBridge, RendererProjectPayload } from "../shared/bridge.js";
+import type {
+  AgentRequestPayload,
+  MagentBridge,
+  RendererProjectPayload,
+} from "../shared/bridge.js";
+import type {
+  FetchModelsRequest,
+  SubscriptionInput,
+} from "../shared/subscriptions.js";
 
 const bridge: MagentBridge = {
   openMidi: () => ipcRenderer.invoke("midi:open"),
@@ -18,6 +26,17 @@ const bridge: MagentBridge = {
   browseShell: () => ipcRenderer.invoke("shell:browse"),
   checkShell: (path: string) => ipcRenderer.invoke("shell:check", path),
   runAgent: (payload: AgentRequestPayload) => ipcRenderer.invoke("agent:run", payload),
+  listSubscriptions: () => ipcRenderer.invoke("subscriptions:list"),
+  createSubscription: (input: SubscriptionInput) => ipcRenderer.invoke("subscriptions:create", input),
+  updateSubscription: (id: string, input: SubscriptionInput) => ipcRenderer.invoke("subscriptions:update", id, input),
+  deleteSubscription: (id: string) => ipcRenderer.invoke("subscriptions:delete", id),
+  activateSubscription: (id: string) => ipcRenderer.invoke("subscriptions:activate", id),
+  importSubscriptions: () => ipcRenderer.invoke("subscriptions:import"),
+  fetchSubscriptionModels: (request: FetchModelsRequest) => ipcRenderer.invoke("subscriptions:fetch-models", request),
+  getUsageSummary: () => ipcRenderer.invoke("usage:get-summary"),
+  getUsageDays: (page: number) => ipcRenderer.invoke("usage:get-days", page),
+  getUsageModels: (page: number) => ipcRenderer.invoke("usage:get-models", page),
+  clearUsage: () => ipcRenderer.invoke("usage:clear"),
 };
 
 contextBridge.exposeInMainWorld("magent", bridge);

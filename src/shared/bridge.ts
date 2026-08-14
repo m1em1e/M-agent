@@ -10,6 +10,13 @@ import type {
 } from "./midi.js";
 import type { ConversationSettings, PiThinkingLevel } from "./conversation-settings.js";
 import type { BrowseShellResult, ShellCheckResult, ShellSettingsSnapshot } from "./shell.js";
+import type {
+  FetchModelsRequest,
+  FetchModelsResult,
+  ImportResult,
+  SubscriptionInput,
+  SubscriptionSummary,
+} from "./subscriptions.js";
 
 export interface RendererTrack {
   id: string;
@@ -65,17 +72,48 @@ export interface AgentResponsePayload {
   analysis: string;
   candidates: ProposedChangeSet[];
   kernel: "pi";
-  provider: "pi-openai" | "pi-openai-codex" | "pi-offline";
+  provider: "pi-openai" | "pi-openai-codex" | "pi-custom" | "pi-offline";
   turns: number;
   thinking: string[];
   effectiveThinkingLevel: PiThinkingLevel;
+  modelId: string;
+  inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+}
+
+export interface UsageSummary {
+  runCount: number;
+  turns: number;
+  tokens: number;
+  cacheRead: number;
+  cost: number;
+}
+
+export interface UsageRow {
+  key: string;
+  label: string;
+  runCount: number;
+  turns: number;
+  tokens: number;
+  cacheRead: number;
+  cost: number;
+}
+
+export interface UsagePage {
+  rows: UsageRow[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
 }
 
 export type EnvironmentCheckStatus = "ready" | "missing" | "warning" | "skipped";
 
 export interface EnvironmentCheck {
-  id: "electron" | "node" | "shell" | "npm" | "pi-core" | "pi-cli" | "secure-storage";
+  id: "electron" | "node" | "shell" | "pi-core" | "secure-storage";
   label: string;
   status: EnvironmentCheckStatus;
   required: boolean;
@@ -97,7 +135,7 @@ export interface EnvironmentIssue {
   id: string;
   message: string;
   instruction: string;
-  action: "open-provider-settings" | "open-shell-settings" | "install-npm" | "repair-app";
+  action: "open-provider-settings" | "open-shell-settings" | "repair-app";
 }
 
 export interface StartupEnvironmentReport {
@@ -128,4 +166,15 @@ export interface MagentBridge {
   browseShell(): Promise<BrowseShellResult>;
   checkShell(path: string): Promise<ShellCheckResult>;
   runAgent(payload: AgentRequestPayload): Promise<AgentResponsePayload>;
+  listSubscriptions(): Promise<SubscriptionSummary[]>;
+  createSubscription(input: SubscriptionInput): Promise<SubscriptionSummary>;
+  updateSubscription(id: string, input: SubscriptionInput): Promise<SubscriptionSummary>;
+  deleteSubscription(id: string): Promise<void>;
+  activateSubscription(id: string): Promise<SubscriptionSummary[]>;
+  importSubscriptions(): Promise<ImportResult>;
+  fetchSubscriptionModels(request: FetchModelsRequest): Promise<FetchModelsResult>;
+  getUsageSummary(): Promise<UsageSummary>;
+  getUsageDays(page: number): Promise<UsagePage>;
+  getUsageModels(page: number): Promise<UsagePage>;
+  clearUsage(): Promise<void>;
 }

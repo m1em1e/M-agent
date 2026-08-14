@@ -10,6 +10,7 @@ import {
 } from "../shared/conversation-settings.js";
 import { rendererPayloadToProject } from "./project-adapter.js";
 import type { AgentAuthentication } from "./environment-service.js";
+import { recordUsage } from "./usage-store.js";
 
 /**
  * Main-process orchestration boundary. Every cloud or offline request runs
@@ -30,13 +31,32 @@ export async function runAgent(
     project: rendererPayloadToProject(payload.project),
     provider: authentication?.provider,
     apiKey: authentication?.provider === "openai" ? authentication.apiKey : undefined,
-    credentials: authentication?.credentials,
-    modelId: authentication?.provider === "openai-codex" ? "gpt-5.4-mini" : "gpt-5-mini",
+    credentials: authentication?.provider === "openai" || authentication?.provider === "openai-codex"
+      ? authentication.credentials
+      : undefined,
+    customProvider: authentication?.provider === "custom" ? authentication.customProvider : undefined,
+    modelId: authentication?.provider === "custom"
+      ? (authentication.customProvider.activeModelId ?? authentication.customProvider.models[0]?.id)
+      : authentication?.provider === "openai-codex" ? "gpt-5.4-mini" : "gpt-5-mini",
     maximumTurns: payload.mode === "goal" ? conversation.goalMaxTurns : 2,
     maximumOutputTokens: payload.mode === "goal" ? conversation.goalMaxTokens : DEFAULT_CONVERSATION_SETTINGS.goalMaxTokens,
     thinkingLevel: conversation.thinkingLevel,
     signal,
   });
+  if (result.provider !== "pi-offline") {
+    recordUsage({
+      timestamp: Date.now(),
+      day: localDayKey(new Date()),
+      modelId: result.modelId,
+      modelName: result.modelId,
+      turns: result.turns,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
+      cost: result.cost,
+    });
+  }
   return {
     analysis: result.analysis,
     candidates: result.candidates,
@@ -45,8 +65,20 @@ export async function runAgent(
     turns: result.turns,
     thinking: result.thinking,
     effectiveThinkingLevel: result.effectiveThinkingLevel,
+    modelId: result.modelId,
+    inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
+    cacheReadTokens: result.cacheReadTokens,
+    cacheWriteTokens: result.cacheWriteTokens,
+    cost: result.cost,
   };
+}
+
+function localDayKey(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function assertAgentRequestPayload(value: unknown): asserts value is AgentRequestPayload {

@@ -17,22 +17,24 @@ import type {
   ProviderStatus,
   StartupEnvironmentReport,
 } from "../shared/bridge.js";
+import type { PiCustomProviderConfig } from "../core/agent/pi-kernel.js";
 import { getApiKey } from "./secure-settings.js";
 import { getPiCredentialStore } from "./pi-credential-store.js";
 import { PiCliCredentialStore } from "./pi-cli-credential-store.js";
-import { checkConfiguredShell, runConfiguredShellCommand } from "./shell-service.js";
+import { getActiveSubscriptionProfile, readSubscriptionApiKey } from "./subscription-store.js";
+import { checkConfiguredShell } from "./shell-service.js";
 import type { ShellCheckResult } from "../shared/shell.js";
 
 export type AgentAuthentication =
   | { provider: "openai"; apiKey?: string; credentials?: CredentialStore }
   | { provider: "openai-codex"; credentials: CredentialStore }
+  | { provider: "custom"; customProvider: PiCustomProviderConfig }
   | null;
 
 export type AppCredentialStore = Pick<CredentialStore, "read" | "list" | "modify" | "delete">;
 
 interface EnvironmentDependencies {
   development: boolean;
-  probeCommand(name: "npm" | "pi"): Promise<string | null>;
   shellCheck: ShellCheckResult;
   piVersion: string | null;
   nodeVersion: string;
@@ -42,6 +44,7 @@ interface EnvironmentDependencies {
   environmentApiKey: boolean;
   appCredentials: CredentialStore;
   piCredentials: Pick<CredentialStore, "read" | "list">;
+  activeSubscriptionApiKey: string | null;
 }
 
 const MINIMUM_PI_NODE = [22, 19, 0] as const;
@@ -51,7 +54,6 @@ export async function getStartupEnvironmentReport(): Promise<StartupEnvironmentR
   const shellCheck = await checkConfiguredShell();
   return diagnoseEnvironment({
     development: !app.isPackaged,
-    probeCommand: probeVersionCommand,
     shellCheck,
     piVersion: installedPiVersion(),
     nodeVersion: process.versions.node,
@@ -61,17 +63,17 @@ export async function getStartupEnvironmentReport(): Promise<StartupEnvironmentR
     environmentApiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
     appCredentials: getPiCredentialStore(),
     piCredentials: new PiCliCredentialStore(),
+    activeSubscriptionApiKey: (() => {
+      const active = getActiveSubscriptionProfile();
+      return active ? readSubscriptionApiKey(active.id) : null;
+    })(),
   });
 }
 
 export async function diagnoseEnvironment(
   dependencies: EnvironmentDependencies,
 ): Promise<StartupEnvironmentReport> {
-  const [npmVersion, piCliVersion, providerResult] = await Promise.all([
-    dependencies.development && dependencies.shellCheck.usable ? dependencies.probeCommand("npm") : Promise.resolve(null),
-    dependencies.development && dependencies.shellCheck.usable ? dependencies.probeCommand("pi") : Promise.resolve(null),
-    inspectProviders(dependencies),
-  ]);
+  const providerResult = await inspectProviders(dependencies);
   const nodeReady = isVersionAtLeast(dependencies.nodeVersion, MINIMUM_PI_NODE);
   const checks: EnvironmentCheck[] = [
     {
@@ -107,32 +109,6 @@ export async function diagnoseEnvironment(
       message: dependencies.piVersion ? "Pi SDK 已随应用内置，无需另行安装。" : "应用内置 Pi SDK 无法加载，请重新安装应用。",
     },
     {
-      id: "npm",
-      label: "npm",
-      status: dependencies.development && dependencies.shellCheck.usable ? (npmVersion ? "ready" : "missing") : "skipped",
-      required: dependencies.development && dependencies.shellCheck.usable,
-      version: npmVersion || undefined,
-      message: dependencies.development
-        ? !dependencies.shellCheck.usable
-          ? "配置可用的 Shell 后再检测 npm。"
-          : (npmVersion ? "开发工具可用。" : "所选 Shell 中未找到 npm，请安装 Node.js 或检查 PATH。")
-        : "安装版运行不依赖 npm。",
-    },
-    {
-      id: "pi-cli",
-      label: "外部 Pi CLI",
-      status: piCliVersion ? "ready" : "skipped",
-      required: false,
-      version: piCliVersion || undefined,
-      message: piCliVersion
-        ? "已检测到；应用可导入其标准登录状态。"
-        : dependencies.development && !dependencies.shellCheck.usable
-          ? "配置可用的 Shell 后再检测外部 Pi CLI。"
-          : dependencies.development
-          ? "未安装；应用仍使用内置 Pi 内核。"
-          : "安装版不执行外部 Pi CLI；仅安全读取标准登录文件。",
-    },
-    {
       id: "secure-storage",
       label: "系统凭据加密",
       status: dependencies.safeStorageAvailable ? "ready" : "warning",
@@ -150,19 +126,18 @@ export async function diagnoseEnvironment(
         message: `${check.label}不可用`,
         instruction: check.id === "shell"
           ? "请在设置 > 通用 > Shell 路径中选择可用的 Bash 或 PowerShell 并检测。"
-          : check.id === "npm"
-            ? "请安装包含 npm 的 Node.js 后重新启动。"
-            : "请修复或重新安装 M Agent。",
-        action: check.id === "shell" ? "open-shell-settings" : check.id === "npm" ? "install-npm" : "repair-app",
+          : "请修复或重新安装 M Agent。",
+        action: check.id === "shell" ? "open-shell-settings" : "repair-app",
       });
     }
   }
-  const agentReady = providerResult.providers.some((provider) => provider.usable);
+  const agentReady = providerResult.providers.some((provider) => provider.usable)
+    || Boolean(dependencies.activeSubscriptionApiKey);
   if (!agentReady) {
     issues.push({
       id: "provider-auth",
       message: "尚无可用的在线模型供应商",
-      instruction: "请在应用内填写 OpenAI API Key，或登录 ChatGPT Plus/Pro；未配置时仅能使用离线演示。",
+      instruction: "请在设置 > 供应商 中新建、导入或激活一个带 API Key 的订阅；未配置时仅能使用离线演示。",
       action: "open-provider-settings",
     });
   }
@@ -180,6 +155,28 @@ export async function diagnoseEnvironment(
 
 export async function resolveAgentAuthentication(signal?: AbortSignal): Promise<AgentAuthentication> {
   if (process.env.MAGENT_FORCE_OFFLINE === "1") return null;
+  const activeSubscription = getActiveSubscriptionProfile();
+  if (activeSubscription) {
+    const apiKey = readSubscriptionApiKey(activeSubscription.id);
+    if (apiKey) {
+      const activeModelId = activeSubscription.activeModelId
+        ?? activeSubscription.models[0]?.id
+        ?? "";
+      if (activeModelId) {
+        return {
+          provider: "custom",
+          customProvider: {
+            providerId: activeSubscription.providerId,
+            apiType: activeSubscription.apiType,
+            baseUrl: activeSubscription.baseUrl,
+            apiKey,
+            models: activeSubscription.models,
+            activeModelId,
+          },
+        };
+      }
+    }
+  }
   const secureApiKey = getApiKey();
   if (secureApiKey) return { provider: "openai", apiKey: secureApiKey };
   const appCredentials = getPiCredentialStore();
@@ -379,19 +376,6 @@ function waitForPromptCancellation(signal?: AbortSignal): Promise<string> {
 async function safeList(store: Pick<CredentialStore, "list">): Promise<readonly CredentialInfo[]> {
   try { return await store.list(); }
   catch { return []; }
-}
-
-async function probeVersionCommand(name: "npm" | "pi"): Promise<string | null> {
-  try {
-    const result = await runConfiguredShellCommand({
-      bash: `${name} --version`,
-      powershell: process.platform === "win32" ? `& ${name}.cmd --version` : `${name} --version`,
-    }, { timeoutMs: 3_000, maximumOutputBytes: 64 * 1024 });
-    const version = result.stdout.trim().match(/\d+\.\d+\.\d+/)?.[0];
-    return version ?? null;
-  } catch {
-    return null;
-  }
 }
 
 function installedPackageVersion(packageName: string): string | null {

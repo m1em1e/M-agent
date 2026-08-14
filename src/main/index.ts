@@ -19,11 +19,14 @@ import {
 } from "./environment-service.js";
 import { getPiCredentialStore } from "./pi-credential-store.js";
 import { checkAndSaveConfiguredShell, getConfiguredShellSettings } from "./shell-service.js";
+import { registerSubscriptionIpc } from "./subscription-ipc.js";
+import { registerUsageIpc } from "./usage-ipc.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const MAX_MIDI_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_PROJECT_FILE_BYTES = 32 * 1024 * 1024;
+const UI_ZOOM_FACTOR = 1.15;
 
 if (process.platform === "win32") {
   // Keep the Electron development host out of installed-app taskbar groups and stale pins.
@@ -45,8 +48,8 @@ function createWindow(): void {
   const window = new BrowserWindow({
     width: 1480,
     height: 920,
-    minWidth: 1120,
-    minHeight: 700,
+    minWidth: 1250,
+    minHeight: 800,
     backgroundColor: "#101214",
     ...(windowIcon ? { icon: windowIcon } : {}),
     titleBarStyle: "hiddenInset",
@@ -64,6 +67,10 @@ function createWindow(): void {
       ? new URL(url).origin === new URL(process.env.VITE_DEV_SERVER_URL!).origin
       : url === productionUrl;
     if (!allowed) event.preventDefault();
+  });
+  window.webContents.setZoomFactor(UI_ZOOM_FACTOR);
+  window.webContents.on("did-finish-load", () => {
+    window.webContents.setZoomFactor(UI_ZOOM_FACTOR);
   });
   if (isDevelopment) void window.loadURL(process.env.VITE_DEV_SERVER_URL!);
   else void window.loadURL(productionUrl);
@@ -194,6 +201,9 @@ ipcMain.handle("agent:run", async (event, payload: unknown) => {
     activeAgentRuns.delete(senderId);
   }
 });
+
+registerSubscriptionIpc();
+registerUsageIpc();
 
 app.whenReady().then(() => {
   void (async () => {

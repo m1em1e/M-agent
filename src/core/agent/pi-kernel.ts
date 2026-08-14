@@ -2,23 +2,40 @@ import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent
 import {
   Type,
   createModels,
+  createProvider,
   fauxAssistantMessage,
   fauxProvider,
   clampThinkingLevel,
   fauxThinking,
   fauxText,
   fauxToolCall,
-  type Model,
   type CredentialStore,
+  type Model,
+  type Provider,
 } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
+import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
+import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
+import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
 import type { AgentMode } from "../../shared/midi.js";
 import type { MidiProject, ProposedChangeSet } from "../../shared/midi.js";
 import type { PiThinkingLevel } from "../../shared/conversation-settings.js";
+import type { SubscriptionApiType, SubscriptionModel } from "../../shared/subscriptions.js";
+import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
 import { validateChangeSet } from "../midi/edits.js";
 import { assertAgentToolAllowed } from "./permissions.js";
 import { parseProposedChangeSet } from "./schema.js";
+
+export interface PiCustomProviderConfig {
+  providerId: string;
+  apiType: SubscriptionApiType;
+  baseUrl: string;
+  apiKey: string;
+  models: SubscriptionModel[];
+  activeModelId?: string;
+}
 
 export interface PiKernelRequest {
   requestId: string;
@@ -26,8 +43,9 @@ export interface PiKernelRequest {
   objective: string;
   project: Readonly<MidiProject>;
   apiKey?: string | null;
-  provider?: "openai" | "openai-codex";
+  provider?: "openai" | "openai-codex" | "custom";
   credentials?: CredentialStore;
+  customProvider?: PiCustomProviderConfig;
   modelId?: string;
   maximumTurns?: number;
   maximumOutputTokens?: number;
@@ -45,12 +63,17 @@ export interface PiKernelEvent {
 export interface PiKernelResult {
   analysis: string;
   candidates: ProposedChangeSet[];
-  provider: "pi-openai" | "pi-openai-codex" | "pi-offline";
+  provider: "pi-openai" | "pi-openai-codex" | "pi-custom" | "pi-offline";
   events: PiKernelEvent[];
   turns: number;
   thinking: string[];
   effectiveThinkingLevel: PiThinkingLevel;
+  modelId: string;
+  inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
 }
 
 const TOOL_CAPABILITIES = {
@@ -290,16 +313,64 @@ function createOpenAICodexRuntime(credentials: CredentialStore, modelId: string)
   return { models, model, provider: "pi-openai-codex" as const };
 }
 
+export function buildCustomProviderModels(config: PiCustomProviderConfig): Array<Model<any>> {
+  return config.models.map((model) => ({
+    id: model.id,
+    name: model.name,
+    api: config.apiType,
+    provider: config.providerId,
+    baseUrl: config.baseUrl,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    maxTokens: model.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+  }));
+}
+
+export function createCustomProvider(config: PiCustomProviderConfig): Provider {
+  const apiForType = (apiType: SubscriptionApiType) => {
+    if (apiType === "openai-completions") return openAICompletionsApi();
+    if (apiType === "openai-responses") return openAIResponsesApi();
+    if (apiType === "anthropic-messages") return anthropicMessagesApi();
+    return googleGenerativeAIApi();
+  };
+  return createProvider({
+    id: config.providerId,
+    name: config.providerId,
+    baseUrl: config.baseUrl,
+    auth: {
+      apiKey: {
+        name: `${config.providerId} API key`,
+        resolve: async () => ({ auth: { apiKey: config.apiKey, baseUrl: config.baseUrl } }),
+      },
+    },
+    models: buildCustomProviderModels(config),
+    api: apiForType(config.apiType),
+  });
+}
+
+function createCustomRuntime(config: PiCustomProviderConfig, activeModelId: string) {
+  const models = createModels();
+  const provider = createCustomProvider(config);
+  models.setProvider(provider);
+  const model = models.getModel(config.providerId, activeModelId);
+  if (!model) throw new Error(`Pi AI 找不到订阅模型：${activeModelId}`);
+  return { models, model, apiKey: config.apiKey, provider: "pi-custom" as const };
+}
+
 export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelResult> {
   const candidates: ProposedChangeSet[] = [];
   const events: PiKernelEvent[] = [];
   const runtime = request.provider === "openai-codex" && request.credentials
     ? createOpenAICodexRuntime(request.credentials, request.modelId ?? "gpt-5.4-mini")
-    : request.provider === "openai" && (request.apiKey || request.credentials)
-      ? createOpenAIRuntime(request.apiKey ?? undefined, request.credentials, request.modelId ?? "gpt-5-mini")
-      : request.apiKey
-        ? createOpenAIRuntime(request.apiKey, undefined, request.modelId ?? "gpt-5-mini")
-        : createOfflineRuntime(request, request.project);
+    : request.provider === "custom" && request.customProvider
+      ? createCustomRuntime(request.customProvider, request.modelId ?? request.customProvider.activeModelId ?? request.customProvider.models[0]?.id ?? "")
+      : request.provider === "openai" && (request.apiKey || request.credentials)
+        ? createOpenAIRuntime(request.apiKey ?? undefined, request.credentials, request.modelId ?? "gpt-5-mini")
+        : request.apiKey
+          ? createOpenAIRuntime(request.apiKey, undefined, request.modelId ?? "gpt-5-mini")
+          : createOfflineRuntime(request, request.project);
   const maximumTurns = Math.max(1, Math.min(Math.round(request.maximumTurns ?? (request.mode === "goal" ? 20 : 2)), 100));
   const maximumOutputTokens = Math.max(1_024, Math.min(Math.round(request.maximumOutputTokens ?? 500_000), 2_000_000));
   const requestedThinkingLevel = request.thinkingLevel ?? "medium";
@@ -309,6 +380,10 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     : requestedThinkingLevel;
   let turns = 0;
   let outputTokens = 0;
+  let inputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let cost = 0;
   const agent = new Agent({
     initialState: {
       systemPrompt: systemPrompt(request.mode),
@@ -329,7 +404,14 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     sessionId: request.requestId,
     shouldStopAfterTurn: ({ message }) => {
       turns += 1;
-      outputTokens += message.usage.output;
+      const usage = message.usage;
+      if (usage) {
+        inputTokens += usage.input;
+        outputTokens += usage.output;
+        cacheReadTokens += usage.cacheRead;
+        cacheWriteTokens += usage.cacheWrite;
+        cost += usage.cost?.total ?? 0;
+      }
       if (turns >= maximumTurns) return true;
       if (outputTokens >= maximumOutputTokens) return true;
       if (request.mode === "research") return true;
@@ -376,7 +458,12 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     turns,
     thinking: collectAssistantThinking(agent),
     effectiveThinkingLevel,
+    modelId: runtime.model.id,
+    inputTokens,
     outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    cost,
   };
 }
 

@@ -1,6 +1,6 @@
 # 环境检测与供应商认证
 
-> 状态基线：2026-08-14  
+> 状态基线：2026-08-14
 > 适用版本：M Agent 0.1.0、Pi 0.84.1
 
 ## 1. Pi 的集成方式
@@ -35,78 +35,90 @@ M Agent 使用随应用一起打包的 Pi SDK，而不是调用远程“Pi API�
 
 - 必需运行环境不满足。
 - 默认或已配置的 Bash、Windows PowerShell 或 PowerShell 7 无法执行固定兼容性探针。
-- 没有可用的在线供应商认证。
+- 没有可用的在线供应商认证（包括没有任何带 API Key 的激活订阅）。
 - Renderer 无法读取主进程环境报告。
 
 Shell 不可用时，红条会提供“配置 Shell”入口；没有在线认证时会提供“配置供应商”入口。两种情况均可重新检测。
 
 Shell 路径由主进程持久化，Renderer 只拥有读取、原生浏览和检测白名单接口。候选路径必须是本机绝对路径，文件名为 `bash`/`bash.exe`、`powershell.exe` 或 `pwsh`/`pwsh.exe`，并成功执行固定 sentinel 命令后才会保存。Bash 使用 `-lc`，PowerShell 使用 `-NoLogo -NoProfile -NonInteractive -Command`。当前开发态 npm 与外部 Pi CLI 探测也通过该 Shell 运行。应用没有向 Renderer 或 Agent 暴露任意 Shell 命令接口。
 
-## 3. 当前支持的供应商认证
+## 3. 订阅档案体系
 
-### OpenAI API Key
+“供应商”设置页使用**订阅档案**来管理在线模型供应商。每份档案是一组可以真正发起模型请求的配置：
 
-支持以下来源：
+- 显示名称
+- Provider ID（同时作为 Pi 运行时 provider id 与凭据存储键）
+- API 类型，可选其一：
+  - `openai-completions`（OpenAI Completions）
+  - `openai-responses`（OpenAI Responses）
+  - `anthropic-messages`（Anthropic Messages）
+  - `google-generative-ai`（Google Generative AI）
+- BaseURL
+- API Key（由主进程 `safeStorage` 加密保存，绝不下发 Renderer）
+- 模型列表，每项包含模型 ID、显示名、上下文窗口（留空按 128k 处理）
+- 备注
 
-1. 应用内设置页保存的 OpenAI API Key。
-2. 从标准 Pi 登录文件复制到应用加密存储的 OpenAI API Key。
-3. 主进程环境中的 `OPENAI_API_KEY`。
+### 3.1 空状态与入口
 
-设置页显示“已配置”只代表本地凭据结构可以解析，并不代表服务端已经确认 Key 有效。Key 是否失效、额度不足或被限流，要到第一次真实模型请求时才能确定。
+- 没有任何订阅档案时，供应商页显示：“暂无订阅档案。可点击「导入已有」从 Pi / cc-switch 同步，或新建 / 从预设添加。”
+- 右上角有三个按钮：
+  - **导入已有**：自动检测 Pi auth/models 与 CC Switch 本机可用的订阅并导入。
+  - **新建**：打开新建供应商页，逐项配置。
+  - **从预设添加**：从内置常用预设清单选择，用预设值预填表单。
 
-### OpenAI Codex 订阅 OAuth
+### 3.2 新建供应商页
 
-Pi 0.84.1 提供 `openai-codex` Provider，可通过 ChatGPT Plus/Pro OAuth 使用 Codex 模型。当前应用内流程为：
+字段与校验：
 
-1. 用户在设置页点击“使用浏览器登录订阅”。
-2. 主进程调用 Pi Provider 的 OAuth 登录流程。
-3. 主进程仅允许打开 `https://auth.openai.com`。
-4. 浏览器完成登录后，Pi 通过本机回调地址接收授权结果。
-5. access token 和 refresh token 经 Electron `safeStorage` 加密保存。
+- 显示名称、Provider ID、API 类型、BaseURL、API key 为必填（BaseURL 会去除尾部 `/`）。
+- 模型列表：每行含模型 ID、显示名、上下文（留空按 128k）。模型列表上方有**拉取模型**按钮，会根据 BaseURL/API key/API 类型向供应商的 `/models` 接口拉取模型列表并回填。
+- 备注为可选，上限 2000 字符。
 
-当前只实现浏览器回调登录，没有 Renderer 内的手动授权码输入或 device-code 界面。登录任务最多等待 5 分钟；窗口关闭或超时会中止。
+### 3.3 预设清单
 
-## 4. 标准 Pi 凭据导入
+内置常用预设对齐 CC Switch 常见供应商，包括 OpenAI（Responses）、OpenAI（Completions）、Anthropic、Google Gemini、DeepSeek、Moonshot/Kimi、Groq、OpenRouter。预设只提供参数与常用模型，不包含任何密钥。
 
-启动时，应用会只读检查标准 Pi coding-agent 凭据文件：
+## 4. 导入已有
 
-```text
-%PI_CODING_AGENT_DIR%/auth.json
-```
+“导入已有”会执行以下只读检测并生成订阅档案（去重：Provider ID + BaseURL 相同则跳过）：
 
-未设置 `PI_CODING_AGENT_DIR` 时使用：
+### 4.1 Pi 登录状态
 
-```text
-~/.pi/agent/auth.json
-```
+- 读取标准 Pi coding-agent `auth.json`（`%PI_CODING_AGENT_DIR%/auth.json`，未设置时 `~/.pi/agent/auth.json`）。
+- `openai` 的 `api_key` 凭据 → 生成 OpenAI（Responses，`https://api.openai.com/v1`）订阅。
+- `openai-codex` OAuth 订阅暂不迁移为档案，仅保留旧运行时通道（界面已隐藏）。
+- 会把标准 Pi 凭据只读复制到应用自己的加密存储（`importPiCliCredentials`），不覆盖应用内已配置凭据，不回写外部文件。
 
-只处理 `openai` 和 `openai-codex` 两个 Provider。处理规则：
+### 4.2 CC Switch
 
-- 只从外部 Pi 文件读取，不向它写入或删除内容。
-- 将可识别凭据复制到 M Agent 自己的 `safeStorage` 加密存储。
-- 已存在应用内凭据时不覆盖。
-- 后续 OAuth 刷新只更新应用自己的加密副本。
-- IPC 和 Renderer 只收到 Provider、认证类型、来源和可用状态，不会收到 Key、Token、授权 URL 或凭据文件路径。
-
-旧版本保存在 `secure-settings` 中的 API Key 会迁移到新的 Provider 凭据存储；迁移成功后删除旧副本。清除 API Key 时会同时清理旧、新两处存储，避免旧值重新生效。
+- 使用 Electron 内置 Node 的 `node:sqlite` 以只读方式打开 `~/.cc-switch/cc-switch.db`。
+- 读取 `providers` 表并按 `settings_config` 映射：
+  - `codex`：解析 config TOML 中 `[model_providers.<id>]` 的 `base_url`/`wire_api`/`name` 与顶层 `model`，从 `auth.OPENAI_API_KEY` 取密钥 → OpenAI Completions 或 Responses。
+  - `claude` / `claude-desktop`：从 `env.ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）→ Anthropic Messages。
+  - `gemini`：从 `env.GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`（或 `GOOGLE_API_KEY`）→ Google Generative AI。
+  - `grokbuild`：解析 `[model.<id>]` TOML 的 `base_url`/`api_key`/`api_backend` → OpenAI Completions 或 Responses。
+- 跳过 `category = "official"` 的官方种子以及无法映射的条目，并在结果中报告跳过数量。
+- CC Switch 数据库缺失、被占用或损坏时静默降级，不会阻塞导入。
 
 ## 5. 运行时选择
 
-当前 Agent 运行时按以下顺序选择可用认证：
+Agent 请求时按以下顺序选择认证：
 
-1. 尚未迁移完成的旧版应用 API Key。
-2. 应用加密存储中的 ChatGPT Plus/Pro OAuth。
-3. 应用加密存储中的 OpenAI API Key，或 `OPENAI_API_KEY`。
-4. Pi faux 离线 Provider。
+1. **激活订阅**：存在激活订阅且有 API Key 时，使用该档案的 Provider ID、API 类型、BaseURL、API Key 与默认模型动态构建 Pi provider。
+2. 尚未迁移完成的旧版应用 API Key。
+3. 应用加密存储中的 ChatGPT Plus/Pro OAuth。
+4. 应用加密存储中的 OpenAI API Key，或 `OPENAI_API_KEY`。
+5. Pi faux 离线 Provider。
 
-设置页会同时显示两种 Provider 的状态和当前实际使用的 Provider。离线 Provider 只用于演示 Agent 编排与权限边界，不是本地大模型，也不会产生云端音乐生成质量。
+激活订阅通过 `createProvider` 在运行时装配：`api` 按 API 类型选择对应的 lazy adapter（OpenAI Completions / Responses、Anthropic Messages、Google Generative AI），模型由档案中的模型列表映射（上下文默认 128k，BaseURL 直接写入每个模型）。离线 Provider 只用于演示 Agent 编排与权限边界，不是本地大模型，也不会产生云端音乐生成质量。
 
 ## 6. 安全边界
 
-- 所有认证操作只在 Electron 主进程执行。
+- 所有认证与订阅操作只在 Electron 主进程执行。
 - preload 只暴露严格白名单 IPC。
-- Renderer 不保存、不读取和不记录任何凭据。
+- Renderer 不保存、不读取和不记录任何凭据；订阅摘要只包含“是否已配置 Key”的布尔值。
 - API Key、OAuth Token 不会写入 `.magent` 或 MIDI 文件。
+- 订阅档案元数据（不含 Key）存于 `subscriptions` 配置；API Key 经 Electron `safeStorage` 加密后单独保存。
 - 每个窗口同一时间只允许一个 OAuth 登录和一个 Agent 请求。
 - OAuth 登录地址会校验协议与主机名。
 - Agent 仍然没有直接应用 MIDI 修改、写文件或导出文件的工具。
@@ -117,12 +129,16 @@ Pi 0.84.1 提供 `openai-codex` Provider，可通过 ChatGPT Plus/Pro OAuth 使�
 
 - 环境诊断数据结构和 Node 版本边界。
 - 正式安装逻辑中 npm、全局 Pi CLI 均不是必需项。
+- 订阅档案 CRUD、激活、导入去重、Key 加密往返与删除；摘要不泄露 Key。
+- CC Switch 数据库读取与各类 provider 的 best-effort 映射。
+- 订阅 → pi-ai 模型映射与自定义 provider 构建。
 - Provider 状态不会返回测试用密钥内容。
 - Renderer → sandbox preload → IPC → 环境诊断和 Pi 离线 Agent 的真实 Electron 链路。
 
 尚未自动验证：
 
-- 真实 OpenAI API Key 请求。
+- 真实 API Key 请求（各订阅 API 类型的真实模型调用）。
+- 拉取模型接口对各类供应商 `/models` 返回结构的兼容性。
 - 真实 ChatGPT Plus/Pro 登录后的模型 entitlement。
 - OAuth 回调端口被占用、网络代理和企业登录策略等现场环境。
 - 真正 `win-unpacked` 或 NSIS 安装版在完全未安装 npm/Pi 的电脑上的启动行为。

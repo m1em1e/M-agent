@@ -14,9 +14,24 @@ import type {
   OpenMidiResult,
   RendererProjectPayload,
   StartupEnvironmentReport,
+  UsagePage,
+  UsageSummary,
 } from "../shared/bridge";
 import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent, TickRange, TimeSignatureEvent } from "../shared/midi";
 import type { ShellCheckResult } from "../shared/shell";
+import {
+  SUBSCRIPTION_API_TYPES,
+  subscriptionApiTypeLabel,
+  type FetchModelsRequest,
+  type SubscriptionInput,
+  type SubscriptionModel,
+  type SubscriptionSummary,
+} from "../shared/subscriptions";
+import {
+  findProviderPreset,
+  PROVIDER_PRESETS,
+  type ProviderPreset,
+} from "../shared/provider-presets";
 import {
   GOAL_MAX_TOKENS_RANGE,
   GOAL_MAX_TURNS_RANGE,
@@ -391,6 +406,13 @@ function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet):
   return next;
 }
 
+function subscriptionSourceLabel(source: SubscriptionSummary["source"]): string {
+  if (source === "pi") return "Pi";
+  if (source === "cc-switch") return "CC Switch";
+  if (source === "preset") return "预设";
+  return "手动";
+}
+
 function Icon({ name, size = 16 }: { name: string; size?: number }) {
   const paths: Record<string, string> = {
     play: "M7 5v14l11-7z",
@@ -467,6 +489,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [environment, setEnvironment] = useState<StartupEnvironmentReport | null>(null);
   const [environmentError, setEnvironmentError] = useState<string | null>(null);
   const [environmentBusy, setEnvironmentBusy] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
+  const [subscriptionBusy, setSubscriptionBusy] = useState(false);
+  const [providersView, setProvidersView] = useState<"list" | "edit">("list");
+  const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
+  const [subscriptionDraft, setSubscriptionDraft] = useState<SubscriptionInput | null>(null);
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
+  const [presetSearch, setPresetSearch] = useState("");
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [usageView, setUsageView] = useState<"day" | "model">("day");
+  const [usagePage, setUsagePage] = useState(1);
+  const [usageData, setUsageData] = useState<UsagePage | null>(null);
+  const [usageBusy, setUsageBusy] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1225,6 +1260,248 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     finally { setEnvironmentBusy(false); }
   };
 
+  const loadSubscriptions = useCallback(async () => {
+    if (!magent?.listSubscriptions) return;
+    try {
+      setSubscriptions(await magent.listSubscriptions());
+    } catch (error) {
+      showToast(errorMessage(error, "读取订阅档案失败"));
+    }
+  }, [magent, showToast]);
+
+  useEffect(() => { void loadSubscriptions(); }, [loadSubscriptions]);
+
+  useEffect(() => {
+    if (settingsOpen && settingsSection === "providers") void loadSubscriptions();
+  }, [loadSubscriptions, settingsOpen, settingsSection]);
+
+  const openNewProvider = useCallback(() => {
+    setPresetPickerOpen(false);
+    setEditingSubscriptionId(null);
+    setSubscriptionDraft({
+      name: "",
+      providerId: "",
+      apiType: "openai-completions",
+      baseUrl: "",
+      apiKey: "",
+      models: [],
+      notes: "",
+    });
+    setProvidersView("edit");
+  }, []);
+
+  const openProviderEditor = useCallback((profile: SubscriptionSummary | ProviderPreset | null) => {
+    if (!profile) {
+      setProvidersView("list");
+      setEditingSubscriptionId(null);
+      setSubscriptionDraft(null);
+      return;
+    }
+    if ("models" in profile && "hasApiKey" in profile) {
+      setEditingSubscriptionId(profile.id);
+      setSubscriptionDraft({
+        name: profile.name,
+        providerId: profile.providerId,
+        apiType: profile.apiType,
+        baseUrl: profile.baseUrl,
+        apiKey: "",
+        models: profile.models.map((model) => ({ id: model.id, name: model.name, contextWindow: model.contextWindow })),
+        notes: profile.notes ?? "",
+        activeModelId: profile.activeModelId,
+      });
+    } else {
+      setEditingSubscriptionId(null);
+      setSubscriptionDraft({
+        name: profile.name,
+        providerId: profile.providerId,
+        apiType: profile.apiType,
+        baseUrl: profile.baseUrl,
+        apiKey: "",
+        models: profile.models.map((model) => ({ id: model.id, name: model.name, contextWindow: model.contextWindow })),
+        notes: profile.notes ?? "",
+      });
+    }
+    setProvidersView("edit");
+  }, []);
+
+  const saveSubscriptionDraft = async () => {
+    if (!magent?.createSubscription || !magent?.updateSubscription) return showToast("桌面存储桥尚未连接");
+    if (!subscriptionDraft) return;
+    if (!subscriptionDraft.name.trim()) return showToast("请填写显示名称");
+    if (!subscriptionDraft.baseUrl.trim()) return showToast("请填写 BaseURL");
+    setSubscriptionBusy(true);
+    try {
+      if (editingSubscriptionId) {
+        await magent.updateSubscription(editingSubscriptionId, subscriptionDraft);
+        showToast("订阅档案已更新");
+      } else {
+        await magent.createSubscription(subscriptionDraft);
+        showToast("订阅档案已创建");
+      }
+      setProvidersView("list");
+      setEditingSubscriptionId(null);
+      setSubscriptionDraft(null);
+      await loadSubscriptions();
+      await refreshEnvironment();
+    } catch (error) {
+      showToast(errorMessage(error, "保存订阅档案失败"));
+    } finally {
+      setSubscriptionBusy(false);
+    }
+  };
+
+  const deleteSelectedSubscription = async () => {
+    const profile = subscriptions.find((subscription) => subscription.id === editingSubscriptionId);
+    if (!profile) return;
+    if (!magent?.deleteSubscription) return showToast("桌面存储桥尚未连接");
+    setSubscriptionBusy(true);
+    try {
+      await magent.deleteSubscription(profile.id);
+      setProvidersView("list");
+      setEditingSubscriptionId(null);
+      setSubscriptionDraft(null);
+      await loadSubscriptions();
+      await refreshEnvironment();
+      showToast(`已删除订阅「${profile.name}」`);
+    } catch (error) {
+      showToast(errorMessage(error, "删除订阅失败"));
+    } finally {
+      setSubscriptionBusy(false);
+    }
+  };
+
+  const activateSelectedSubscription = async (id: string) => {
+    if (!magent?.activateSubscription) return showToast("桌面存储桥尚未连接");
+    setSubscriptionBusy(true);
+    try {
+      setSubscriptions(await magent.activateSubscription(id));
+      await refreshEnvironment();
+      showToast("已切换为当前订阅");
+    } catch (error) {
+      showToast(errorMessage(error, "激活订阅失败"));
+    } finally {
+      setSubscriptionBusy(false);
+    }
+  };
+
+  const importExistingSubscriptions = async () => {
+    if (!magent?.importSubscriptions) return showToast("桌面导入桥尚未连接");
+    setSubscriptionBusy(true);
+    try {
+      const result = await magent.importSubscriptions();
+      await loadSubscriptions();
+      await refreshEnvironment();
+      if (result.imported === 0 && result.skipped.length === 0) {
+        showToast("未发现可导入的订阅");
+      } else {
+        const skipped = result.skipped.length ? `；跳过 ${result.skipped.length} 项` : "";
+        showToast(`已导入 ${result.imported} 个订阅${skipped}`);
+      }
+    } catch (error) {
+      showToast(errorMessage(error, "导入订阅失败"));
+    } finally {
+      setSubscriptionBusy(false);
+    }
+  };
+
+  const runFetchModels = async () => {
+    if (!magent?.fetchSubscriptionModels) return showToast("桌面拉取桥尚未连接");
+    if (!subscriptionDraft) return;
+    if (!subscriptionDraft.baseUrl.trim()) return showToast("请先填写 BaseURL");
+    if (!subscriptionDraft.apiKey?.trim()) return showToast("请先填写 API Key");
+    setFetchingModels(true);
+    try {
+      const request: FetchModelsRequest = {
+        apiType: subscriptionDraft.apiType,
+        baseUrl: subscriptionDraft.baseUrl,
+        apiKey: subscriptionDraft.apiKey.trim(),
+      };
+      const result = await magent.fetchSubscriptionModels(request);
+      setSubscriptionDraft((current) => current ? {
+        ...current,
+        models: result.models.map((model) => ({ id: model.id, name: model.name })),
+      } : current);
+      showToast(result.message ?? `拉取到 ${result.models.length} 个模型`);
+    } catch (error) {
+      showToast(errorMessage(error, "拉取模型失败"));
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const updateDraftModel = (index: number, patch: Partial<SubscriptionModel>) => {
+    setSubscriptionDraft((current) => {
+      if (!current) return current;
+      const models = current.models.map((model, modelIndex) => modelIndex === index ? { ...model, ...patch } : model);
+      return { ...current, models };
+    });
+  };
+
+  const addDraftModel = () => {
+    setSubscriptionDraft((current) => {
+      if (!current) return current;
+      const next: SubscriptionModel = { id: "", name: "" };
+      return { ...current, models: [...current.models, next] };
+    });
+  };
+
+  const removeDraftModel = (index: number) => {
+    setSubscriptionDraft((current) => {
+      if (!current) return current;
+      return { ...current, models: current.models.filter((_, modelIndex) => modelIndex !== index) };
+    });
+  };
+
+  const loadUsageSummary = useCallback(async () => {
+    if (!magent?.getUsageSummary) return;
+    try {
+      setUsageSummary(await magent.getUsageSummary());
+    } catch (error) {
+      showToast(errorMessage(error, "读取用量汇总失败"));
+    }
+  }, [magent, showToast]);
+
+  const loadUsageData = useCallback(async (view: "day" | "model", page: number) => {
+    if (!magent?.getUsageDays || !magent?.getUsageModels) return;
+    setUsageBusy(true);
+    try {
+      const data = view === "day" ? await magent.getUsageDays(page) : await magent.getUsageModels(page);
+      setUsageData(data);
+    } catch (error) {
+      showToast(errorMessage(error, "读取用量列表失败"));
+    } finally {
+      setUsageBusy(false);
+    }
+  }, [magent, showToast]);
+
+  useEffect(() => {
+    if (settingsOpen && settingsSection === "usage") {
+      void loadUsageSummary();
+      void loadUsageData(usageView, usagePage);
+    }
+  }, [loadUsageData, loadUsageSummary, settingsOpen, settingsSection, usagePage, usageView]);
+
+  const clearUsageStatistics = async () => {
+    if (!magent?.clearUsage) return showToast("桌面用量桥尚未连接");
+    setUsageBusy(true);
+    try {
+      await magent.clearUsage();
+      setUsageSummary(null);
+      setUsageData(null);
+      setUsagePage(1);
+      await loadUsageSummary();
+      await loadUsageData(usageView, 1);
+      showToast("本地用量统计已清空");
+    } catch (error) {
+      showToast(errorMessage(error, "清空用量统计失败"));
+    } finally {
+      setUsageBusy(false);
+    }
+  };
+
+  const formatUsageTokens = (value: number) => value.toLocaleString("zh-CN");
+  const formatUsageCost = (value: number) => `$${value.toFixed(4)}`;
+
   const playPosition = useMemo(() => {
     const totalBeats = playhead / projectPpq;
     const bar = Math.floor(totalBeats / BEATS_PER_BAR) + 1;
@@ -1239,12 +1516,25 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const openAIStatus = environment?.providers.find((provider) => provider.id === "openai");
   const codexStatus = environment?.providers.find((provider) => provider.id === "openai-codex");
   const online = environment?.agentReady ?? false;
-  const providerLabel = environment?.activeProvider === "openai"
-    ? "OpenAI API"
-    : environment?.activeProvider === "openai-codex"
-      ? "ChatGPT 订阅"
-      : "Pi 离线模式";
+  const activeSubscription = subscriptions.find((subscription) => subscription.isActive);
+  const providerLabel = activeSubscription
+    ? activeSubscription.name
+    : environment?.activeProvider === "openai"
+      ? "OpenAI API"
+      : environment?.activeProvider === "openai-codex"
+        ? "ChatGPT 订阅"
+        : "Pi 离线模式";
   const activeSettings = settingsSections.find((section) => section.id === settingsSection) ?? settingsSections[0];
+  const filteredProviderPresets = useMemo(() => {
+    const query = presetSearch.trim().toLowerCase();
+    if (!query) return PROVIDER_PRESETS;
+    return PROVIDER_PRESETS.filter((preset) => (
+      preset.name.toLowerCase().includes(query)
+      || subscriptionApiTypeLabel(preset.apiType).toLowerCase().includes(query)
+      || preset.baseUrl.toLowerCase().includes(query)
+      || preset.models.some((model) => model.name.toLowerCase().includes(query) || model.id.toLowerCase().includes(query))
+    ));
+  }, [presetSearch]);
   const activeTheme = themePresets.find((theme) => theme.id === appearance.theme) ?? themePresets[0];
   const totalNotes = tracks.reduce((count, track) => count + track.notes.length, 0);
   const secureStorageReady = environment?.checks.find((check) => check.id === "secure-storage")?.status === "ready";
@@ -1686,48 +1976,173 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                       ))}
                     </div>
                   </section>
-                  <section className="settings-group">
-                    <div className="settings-group-heading"><div><strong>Agent 默认状态</strong><span>当前工程使用的运行模式和在线连接状态。</span></div></div>
-                    <div className="settings-summary-grid">
-                      <div><span>当前模式</span><strong>{modeMeta[mode].label}</strong></div>
-                      <div><span>当前供应商</span><strong>{providerLabel}</strong></div>
-                      <div><span>工程 PPQ</span><strong>{projectPpq}</strong></div>
-                      <div><span>界面语言</span><strong>简体中文</strong></div>
-                    </div>
-                  </section>
                 </div>
               )}
 
               {settingsSection === "providers" && (
                 <div className="settings-pane">
-                  <p className="settings-intro">Pi 内核已随应用内置。配置 OpenAI API Key，或通过浏览器登录 ChatGPT Plus/Pro。</p>
-                  <div className="provider-card">
-                    <div><strong>OpenAI API</strong><span className={openAIStatus?.usable ? "provider-state ready" : "provider-state"}>{openAIStatus?.message ?? "检测中…"}</span></div>
-                    {openAIStatus?.source === "app" && <button className="danger-text compact" onClick={clearSavedKey}>清除应用 Key</button>}
-                  </div>
-                  <label className="key-field"><span>在应用内配置 OpenAI API Key</span><input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-••••••••••••••••" autoComplete="off" /></label>
-                  <button className="primary-button provider-action" disabled={!apiKey.trim() || environmentBusy || !secureStorageReady} onClick={saveKey}>安全保存 API Key</button>
-                  <div className="provider-card">
-                    <div><strong>ChatGPT Plus / Pro</strong><span className={codexStatus?.usable ? "provider-state ready" : "provider-state"}>{codexStatus?.message ?? "检测中…"}</span></div>
-                    {codexStatus?.source === "app" && <button className="danger-text compact" onClick={logoutSubscription}>退出应用登录</button>}
-                  </div>
-                  <button className="subscription-button" disabled={environmentBusy} onClick={loginSubscription}>{environmentBusy ? "正在处理…" : codexStatus?.usable ? "重新登录订阅" : "使用浏览器登录订阅"}</button>
-                  <div className="security-note"><Icon name="lock" /><span>凭据不在 Renderer 或工程文件中持久化；应用内保存由主进程安全存储处理。</span></div>
+                  {providersView === "edit" && subscriptionDraft && (
+                    <div className="subscription-editor">
+                      <div className="subscription-editor-head">
+                        <strong>{editingSubscriptionId ? "编辑订阅" : "新建订阅"}</strong>
+                        <div className="subscription-editor-head-actions">
+                          {editingSubscriptionId && (
+                            <button className="danger-text compact" disabled={subscriptionBusy} onClick={deleteSelectedSubscription}>删除</button>
+                          )}
+                          <button className="candidate-secondary" disabled={subscriptionBusy} onClick={() => openProviderEditor(null)}>返回列表</button>
+                        </div>
+                      </div>
+                      <label className="subscription-field"><span>显示名称</span><input value={subscriptionDraft.name} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, name: event.target.value } : current)} placeholder="例如：DeepSeek 主力" /></label>
+                      <label className="subscription-field"><span>Provider ID</span><input value={subscriptionDraft.providerId} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, providerId: event.target.value } : current)} placeholder="例如：deepseek" /></label>
+                      <label className="subscription-field"><span>API 类型</span>
+                        <select value={subscriptionDraft.apiType} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, apiType: event.target.value as SubscriptionInput["apiType"] } : current)}>
+                          {SUBSCRIPTION_API_TYPES.map((apiType) => <option key={apiType.id} value={apiType.id}>{apiType.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="subscription-field"><span>BaseURL</span><input value={subscriptionDraft.baseUrl} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, baseUrl: event.target.value } : current)} placeholder="https://api.example.com/v1" /></label>
+                      <label className="subscription-field"><span>API key</span><input type="password" value={subscriptionDraft.apiKey ?? ""} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, apiKey: event.target.value } : current)} placeholder={editingSubscriptionId ? "留空表示保持不变" : "sk-••••••••••••••••"} autoComplete="off" /></label>
+                      <div className="subscription-models">
+                        <div className="subscription-models-head">
+                          <strong>模型列表</strong>
+                          <button className="candidate-secondary" disabled={fetchingModels} onClick={() => void runFetchModels()}>{fetchingModels ? "拉取中…" : "拉取模型"}</button>
+                        </div>
+                        <div className="subscription-model-head">
+                          <span>模型 ID</span><span>显示名</span><span>上下文（留空为 128k）</span><span />
+                        </div>
+                        {subscriptionDraft.models.map((model, index) => (
+                          <div className="subscription-model-row" key={index}>
+                            <input value={model.id} onChange={(event) => updateDraftModel(index, { id: event.target.value })} placeholder="gpt-5-mini" />
+                            <input value={model.name} onChange={(event) => updateDraftModel(index, { name: event.target.value })} placeholder="GPT-5 mini" />
+                            <input value={model.contextWindow ?? ""} onChange={(event) => {
+                              const raw = event.target.value;
+                              const parsed = raw === "" ? undefined : Number(raw);
+                              updateDraftModel(index, { contextWindow: raw === "" ? undefined : Number.isFinite(parsed) ? parsed : model.contextWindow });
+                            }} placeholder="128000" />
+                            <button className="danger-text compact" onClick={() => removeDraftModel(index)}>移除</button>
+                          </div>
+                        ))}
+                        <button className="candidate-secondary" onClick={addDraftModel}>+ 添加模型</button>
+                      </div>
+                      <label className="subscription-field"><span>备注</span><textarea value={subscriptionDraft.notes ?? ""} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, notes: event.target.value } : current)} placeholder="可选" rows={2} /></label>
+                      <div className="subscription-editor-actions">
+                        <button className="candidate-secondary" onClick={() => openProviderEditor(null)}>取消</button>
+                        <button className="primary-button" disabled={subscriptionBusy} onClick={() => void saveSubscriptionDraft()}>保存</button>
+                      </div>
+                    </div>
+                  )}
+                  {providersView === "list" && (
+                    <>
+                      <div className="subscription-toolbar">
+                        <div>
+                          <button className="quiet-button" disabled={subscriptionBusy} onClick={() => void importExistingSubscriptions()}><Icon name="download" />导入已有</button>
+                          <button className="quiet-button" disabled={subscriptionBusy} onClick={() => setPresetPickerOpen((value) => !value)}><Icon name="plus" />从预设添加</button>
+                        </div>
+                        <button className="primary-button" disabled={subscriptionBusy} onClick={openNewProvider}><Icon name="plus" />新建</button>
+                      </div>
+                      {presetPickerOpen ? (
+                        <div className="preset-picker">
+                          <p className="settings-intro">选择常用预设，会以预设参数预填新建表单，再补充 API Key 与模型。</p>
+                          <label className="preset-search"><Icon name="spark" size={14} /><input value={presetSearch} onChange={(event) => setPresetSearch(event.target.value)} placeholder="搜索预设名称、API 类型或 BaseURL…" autoFocus /></label>
+                          <div className="preset-grid">
+                            {filteredProviderPresets.map((preset) => (
+                              <button key={preset.id} type="button" className="preset-card" onClick={() => { openProviderEditor(preset); setPresetPickerOpen(false); }}>
+                                <strong>{preset.name}</strong>
+                                <span>{subscriptionApiTypeLabel(preset.apiType)} · {preset.baseUrl}</span>
+                                {preset.models.length > 0 && <small>{preset.models.length} 个模型</small>}
+                                {preset.notes && <small>{preset.notes}</small>}
+                              </button>
+                            ))}
+                            {filteredProviderPresets.length === 0 && (
+                              <div className="settings-empty preset-empty"><strong>未找到匹配的预设</strong><p>换个关键词试试，或返回列表点击「新建」手动配置。</p></div>
+                            )}
+                          </div>
+                        </div>
+                      ) : subscriptions.length === 0 ? (
+                        <div className="settings-empty subscription-empty">
+                          <Icon name="cloud" size={24} />
+                          <strong>暂无订阅档案</strong>
+                          <p>可点击「导入已有」从 Pi / cc-switch 同步，或新建 / 从预设添加。</p>
+                        </div>
+                      ) : (
+                        <div className="subscription-list">
+                          {subscriptions.map((subscription) => (
+                            <div key={subscription.id} className={subscription.isActive ? "subscription-card active" : "subscription-card"}>
+                              <div className="subscription-card-main">
+                                <div className="subscription-card-title">
+                                  <strong>{subscription.name}</strong>
+                                  {subscription.isActive && <span className="availability-badge ready">当前</span>}
+                                  {!subscription.hasApiKey && <span className="availability-badge preview">未填 Key</span>}
+                                </div>
+                                <div className="subscription-card-meta">
+                                  <span>{subscriptionApiTypeLabel(subscription.apiType)}</span>
+                                  <span>{subscription.providerId}</span>
+                                  <span>{subscription.baseUrl}</span>
+                                </div>
+                                <div className="subscription-card-meta">
+                                  <span>{subscription.models.length} 个模型</span>
+                                  <span>来源：{subscriptionSourceLabel(subscription.source)}</span>
+                                  {subscription.activeModelId && <span>默认：{subscription.activeModelId}</span>}
+                                </div>
+                              </div>
+                              <div className="subscription-card-actions">
+                                {!subscription.isActive && (
+                                  <button className="candidate-secondary" disabled={subscriptionBusy} onClick={() => void activateSelectedSubscription(subscription.id)}>设为当前</button>
+                                )}
+                                <button className="candidate-secondary" disabled={subscriptionBusy} onClick={() => openProviderEditor(subscription)}>编辑</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="security-note"><Icon name="lock" /><span>API Key 仅保存在本机系统安全存储中，不会出现在此界面或工程文件中。</span></div>
+                    </>
+                  )}
                 </div>
               )}
 
               {settingsSection === "usage" && (
                 <div className="settings-pane">
                   <section className="settings-group">
-                    <div className="settings-group-heading"><div><strong>本地界面概览</strong><span>以下是当前界面数据，不代表模型请求次数、Token 或账单。</span></div><span className="availability-badge preview">本地计数</span></div>
+                    <div className="settings-group-heading"><div><strong>用量统计</strong><span>汇总本机在线 Agent 请求的轮次、Tokens、缓存命中与费用。</span></div><span className="availability-badge preview">本地汇总</span></div>
                     <div className="settings-summary-grid usage-grid">
-                      <div><span>当前会话消息</span><strong>{messages.length}</strong></div>
-                      <div><span>候选修改</span><strong>{candidates.length}</strong></div>
-                      <div><span>工程音符</span><strong>{totalNotes}</strong></div>
-                      <div><span>云端费用</span><strong>未记录</strong></div>
+                      <div><span>轮次</span><strong>{formatUsageTokens(usageSummary?.turns ?? 0)}</strong></div>
+                      <div><span>Tokens</span><strong>{formatUsageTokens(usageSummary?.tokens ?? 0)}</strong></div>
+                      <div><span>缓存命中</span><strong>{formatUsageTokens(usageSummary?.cacheRead ?? 0)}</strong></div>
+                      <div><span>费用（$）</span><strong>{formatUsageCost(usageSummary?.cost ?? 0)}</strong></div>
                     </div>
                   </section>
-                  <div className="settings-empty"><Icon name="chart" size={24} /><strong>精确用量统计尚未接入</strong><p>后续会从 Pi 运行结果汇总输入/输出 Token、运行次数和预算。当前不会显示推测费用。</p></div>
+                  <section className="settings-group">
+                    <div className="settings-group-heading"><div><strong>用量明细</strong><span>{usageView === "day" ? "按日期聚合" : "按模型聚合"} · 每页 10 条</span></div></div>
+                    <div className="usage-view-tabs" role="tablist" aria-label="用量视图">
+                      <button className={usageView === "day" ? "active" : ""} role="tab" aria-selected={usageView === "day"} onClick={() => { setUsageView("day"); setUsagePage(1); }}>按日</button>
+                      <button className={usageView === "model" ? "active" : ""} role="tab" aria-selected={usageView === "model"} onClick={() => { setUsageView("model"); setUsagePage(1); }}>按模型</button>
+                    </div>
+                    <div className="usage-table">
+                      <div className="usage-table-head"><span>{(usageView === "day" ? "日期" : "模型")}</span><span>轮次</span><span>Tokens</span><span>缓存命中</span><span>费用（$）</span></div>
+                      {(usageData?.rows ?? []).map((row) => (
+                        <div className="usage-table-row" key={row.key}>
+                          <span title={row.label}>{row.label}</span>
+                          <span>{formatUsageTokens(row.turns)}</span>
+                          <span>{formatUsageTokens(row.tokens)}</span>
+                          <span>{formatUsageTokens(row.cacheRead)}</span>
+                          <span>{formatUsageCost(row.cost)}</span>
+                        </div>
+                      ))}
+                      {(usageData?.rows ?? []).length === 0 && !usageBusy && (
+                        <div className="usage-table-empty">暂无在线请求记录</div>
+                      )}
+                      {usageBusy && <div className="usage-table-empty">加载中…</div>}
+                    </div>
+                    <div className="usage-pagination">
+                      <button className="candidate-secondary" disabled={usageBusy || (usageData?.page ?? 1) <= 1} onClick={() => setUsagePage((page) => Math.max(1, page - 1))}>‹ 上一页</button>
+                      <span>第 {usageData?.page ?? 1} / {usageData?.totalPages ?? 1} 页 · 共 {usageData?.total ?? 0} 条</span>
+                      <button className="candidate-secondary" disabled={usageBusy || (usageData?.page ?? 1) >= (usageData?.totalPages ?? 1)} onClick={() => setUsagePage((page) => page + 1)}>下一页 ›</button>
+                    </div>
+                  </section>
+                  <div className="usage-clear">
+                    <span>仅清本地汇总，不影响会话</span>
+                    <button className="candidate-secondary" disabled={usageBusy || (usageSummary?.runCount ?? 0) === 0} onClick={() => void clearUsageStatistics()}>清空</button>
+                  </div>
                 </div>
               )}
 
