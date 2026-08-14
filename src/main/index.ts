@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type OpenDialogOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFile, stat, writeFile } from "node:fs/promises";
@@ -32,6 +32,9 @@ if (process.platform === "win32") {
   // Keep the Electron development host out of installed-app taskbar groups and stale pins.
   app.setAppUserModelId(isDevelopment ? "studio.magent.desktop.dev" : "studio.magent.desktop");
 }
+
+// Remove the default File/Edit/View/Window/Help application menu.
+Menu.setApplicationMenu(null);
 
 function createWindow(): void {
   const productionUrl = pathToFileURL(join(currentDir, "../../dist/index.html")).toString();
@@ -200,6 +203,19 @@ ipcMain.handle("agent:run", async (event, payload: unknown) => {
     event.sender.removeListener("destroyed", abortOnDestroyed);
     activeAgentRuns.delete(senderId);
   }
+});
+
+ipcMain.handle("window:minimize", (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.minimize();
+});
+ipcMain.handle("window:toggle-maximize", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (!window) return;
+  if (window.isMaximized()) window.unmaximize();
+  else window.maximize();
+});
+ipcMain.handle("window:close", (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
 registerSubscriptionIpc();

@@ -182,7 +182,7 @@ try {
       workspaceLayoutStored
     };
   })()`);
-  if (value.title !== "M/Agent" || value.rootChildren < 1 || value.bridgeType !== "function"
+  if (value.title !== "Ruins After Rain · M Agent" || value.rootChildren < 1 || value.bridgeType !== "function"
     || value.kernel !== "pi" || value.provider !== "pi-offline"
     || value.candidateCount !== 0 || value.analysisLength < 1
     || value.environmentSchema !== 1 || value.piCoreStatus !== "ready"

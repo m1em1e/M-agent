@@ -17,6 +17,7 @@ describe("conversation settings", () => {
       thinkingLevel: "medium",
       goalMaxTurns: 20,
       goalMaxTokens: 500_000,
+      projectInjection: "all",
     });
     expect(PI_THINKING_LEVELS).toEqual(["low", "medium", "high"]);
   });
@@ -29,12 +30,19 @@ describe("conversation settings", () => {
       thinkingLevel: "xhigh",
       goalMaxTurns: 500,
       goalMaxTokens: 10,
+      projectInjection: "selected",
     })).toEqual({
       showThinking: false,
       thinkingLevel: "medium",
       goalMaxTurns: 100,
       goalMaxTokens: 1_024,
+      projectInjection: "selected",
     });
+  });
+
+  it("defaults an unknown injection mode to all tracks", () => {
+    expect(normalizeConversationSettings({ projectInjection: "bogus" }).projectInjection).toBe("all");
+    expect(parseConversationSettings('{"projectInjection":"selected"}').projectInjection).toBe("selected");
   });
 
   it("round-trips through storage and tolerates storage failures", () => {
@@ -48,6 +56,7 @@ describe("conversation settings", () => {
       thinkingLevel: "high",
       goalMaxTurns: 24,
       goalMaxTokens: 750_000,
+      projectInjection: "selected",
     };
     saveConversationSettings(settings, storage);
     expect(values.has(CONVERSATION_SETTINGS_STORAGE_KEY)).toBe(true);

@@ -37,6 +37,9 @@ const bridge: MagentBridge = {
   getUsageDays: (page: number) => ipcRenderer.invoke("usage:get-days", page),
   getUsageModels: (page: number) => ipcRenderer.invoke("usage:get-models", page),
   clearUsage: () => ipcRenderer.invoke("usage:clear"),
+  minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
+  closeWindow: () => ipcRenderer.invoke("window:close"),
 };
 
 contextBridge.exposeInMainWorld("magent", bridge);

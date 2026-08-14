@@ -41,6 +41,8 @@ export async function runAgent(
     maximumTurns: payload.mode === "goal" ? conversation.goalMaxTurns : 2,
     maximumOutputTokens: payload.mode === "goal" ? conversation.goalMaxTokens : DEFAULT_CONVERSATION_SETTINGS.goalMaxTokens,
     thinkingLevel: conversation.thinkingLevel,
+    projectInjection: conversation.projectInjection,
+    focusTrackId: payload.focusTrackId,
     signal,
   });
   if (result.provider !== "pi-offline") {
@@ -99,6 +101,9 @@ export function assertAgentRequestPayload(value: unknown): asserts value is Agen
     throw new Error("Agent 请求缺少 MIDI 工程。");
   }
   if (request.conversation !== undefined) assertConversationSettings(request.conversation);
+  if (request.focusTrackId !== undefined && (typeof request.focusTrackId !== "string" || !request.focusTrackId.trim())) {
+    throw new Error("选中轨道 id 无效。");
+  }
 }
 
 function assertConversationSettings(value: unknown): asserts value is ConversationSettings {
@@ -117,5 +122,8 @@ function assertConversationSettings(value: unknown): asserts value is Conversati
     || settings.goalMaxTokens! < GOAL_MAX_TOKENS_RANGE.minimum
     || settings.goalMaxTokens! > GOAL_MAX_TOKENS_RANGE.maximum) {
     throw new Error(`目标最大 Token 必须是 ${GOAL_MAX_TOKENS_RANGE.minimum}–${GOAL_MAX_TOKENS_RANGE.maximum} 的整数。`);
+  }
+  if (settings.projectInjection !== undefined && settings.projectInjection !== "all" && settings.projectInjection !== "selected") {
+    throw new Error("工程注入方式无效。");
   }
 }

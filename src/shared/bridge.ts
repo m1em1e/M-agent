@@ -66,6 +66,8 @@ export interface AgentRequestPayload {
   objective: string;
   project: RendererProjectPayload;
   conversation?: ConversationSettings;
+  /** 当前选中的轨道 id；配合 conversation.projectInjection === "selected" 使用。 */
+  focusTrackId?: string;
 }
 
 export interface AgentResponsePayload {
@@ -177,4 +179,7 @@ export interface MagentBridge {
   getUsageDays(page: number): Promise<UsagePage>;
   getUsageModels(page: number): Promise<UsagePage>;
   clearUsage(): Promise<void>;
+  minimizeWindow(): Promise<void>;
+  toggleMaximizeWindow(): Promise<void>;
+  closeWindow(): Promise<void>;
 }

@@ -1,11 +1,19 @@
 export const PI_THINKING_LEVELS = ["low", "medium", "high"] as const;
 export type PiThinkingLevel = typeof PI_THINKING_LEVELS[number];
 
+export type ProjectInjectionMode = "all" | "selected";
+export const PROJECT_INJECTION_MODES: ReadonlyArray<{ id: ProjectInjectionMode; label: string }> = [
+  { id: "selected", label: "注入选中轨道" },
+  { id: "all", label: "注入全部轨道" },
+];
+
 export interface ConversationSettings {
   showThinking: boolean;
   thinkingLevel: PiThinkingLevel;
   goalMaxTurns: number;
   goalMaxTokens: number;
+  /** 工程注入方式：selected 注入概览 + 选中轨道音符明细；all 注入完整工程 JSON。 */
+  projectInjection: ProjectInjectionMode;
 }
 
 export const CONVERSATION_SETTINGS_STORAGE_KEY = "magent.conversation.v1";
@@ -17,9 +25,11 @@ export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   thinkingLevel: "medium",
   goalMaxTurns: 20,
   goalMaxTokens: 500_000,
+  projectInjection: "all",
 };
 
 const thinkingLevels = new Set<string>(PI_THINKING_LEVELS);
+const injectionModes = new Set<string>(PROJECT_INJECTION_MODES.map((mode) => mode.id));
 const clampInteger = (value: number, minimum: number, maximum: number) =>
   Math.min(maximum, Math.max(minimum, Math.round(value)));
 
@@ -39,6 +49,9 @@ export function normalizeConversationSettings(value: unknown): ConversationSetti
     goalMaxTokens: typeof candidate.goalMaxTokens === "number" && Number.isFinite(candidate.goalMaxTokens)
       ? clampInteger(candidate.goalMaxTokens, GOAL_MAX_TOKENS_RANGE.minimum, GOAL_MAX_TOKENS_RANGE.maximum)
       : DEFAULT_CONVERSATION_SETTINGS.goalMaxTokens,
+    projectInjection: typeof candidate.projectInjection === "string" && injectionModes.has(candidate.projectInjection)
+      ? candidate.projectInjection as ProjectInjectionMode
+      : DEFAULT_CONVERSATION_SETTINGS.projectInjection,
   };
 }
 

@@ -27,6 +27,7 @@ import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
 import { validateChangeSet } from "../midi/edits.js";
 import { assertAgentToolAllowed } from "./permissions.js";
 import { parseProposedChangeSet } from "./schema.js";
+import { AGENT_CONTEXT_PROMPT } from "./context-prompt.js";
 
 export interface PiCustomProviderConfig {
   providerId: string;
@@ -50,6 +51,10 @@ export interface PiKernelRequest {
   maximumTurns?: number;
   maximumOutputTokens?: number;
   thinkingLevel?: PiThinkingLevel;
+  /** 工程注入方式：selected 注入概览 + 选中轨道音符明细；all（默认）注入完整工程。 */
+  projectInjection?: "all" | "selected";
+  /** 配合 projectInjection === "selected" 使用；不存在时回退到完整工程。 */
+  focusTrackId?: string;
   signal?: AbortSignal;
 }
 
@@ -140,6 +145,17 @@ function analysisSnapshot(project: Readonly<MidiProject>) {
   };
 }
 
+
+export function buildProjectContext(request: PiKernelRequest): string {
+  if (request.projectInjection === "selected" && request.focusTrackId) {
+    const track = request.project.tracks.find((item) => item.id === request.focusTrackId);
+    if (track) {
+      return `Current project overview:\n${JSON.stringify(analysisSnapshot(request.project))}\n\nSelected track (${track.name}, id=${track.id}):\n${JSON.stringify(track)}`;
+    }
+  }
+  return `Current project (.magent):\n${JSON.stringify(request.project)}`;
+}
+
 function systemPrompt(mode: AgentMode): string {
   const boundary = mode === "research"
     ? "You are in read-only research mode. Never propose, apply, export, or write changes."
@@ -152,7 +168,8 @@ function systemPrompt(mode: AgentMode): string {
     "Use the provided tools instead of inventing track or note identifiers.",
     "Keep MIDI pitch and velocity in 0..127, ticks non-negative, and durations positive.",
     "Finish with a concise Chinese analysis for the user.",
-  ].join(" ");
+    AGENT_CONTEXT_PROMPT,
+  ].join("\n\n");
 }
 
 function textFromEvent(event: AgentEvent): string {
@@ -442,7 +459,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     await agent.prompt([
       {
         role: "user",
-        content: `${request.objective}\n\nCurrent project overview:\n${JSON.stringify(analysisSnapshot(request.project))}`,
+        content: `${request.objective}\n\n${buildProjectContext(request)}`,
         timestamp: Date.now(),
       },
     ]);
@@ -468,3 +485,4 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
 }
 
 export { MODE_TOOLS as PI_MODE_TOOLS };
+

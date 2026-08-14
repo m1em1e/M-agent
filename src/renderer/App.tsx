@@ -37,6 +37,7 @@ import {
   GOAL_MAX_TURNS_RANGE,
   loadConversationSettings,
   PI_THINKING_LEVELS,
+  PROJECT_INJECTION_MODES,
   saveConversationSettings,
   type ConversationSettings,
 } from "../shared/conversation-settings";
@@ -70,6 +71,79 @@ const settingsSections: Array<{ id: SettingsSection; label: string; icon: string
   { id: "usage", label: "用量", icon: "chart" },
   { id: "sound", label: "音源", icon: "music" },
   { id: "plugins", label: "插件", icon: "plugin" },
+];
+
+interface MenuEntry {
+  label: string;
+  shortcut?: string;
+  action?: string;
+  disabled?: boolean;
+}
+
+interface MenuGroup {
+  key: string;
+  label: string;
+  accessKey: string;
+  items: MenuEntry[];
+}
+
+const menuGroups: MenuGroup[] = [
+  {
+    key: "file",
+    label: "文件",
+    accessKey: "F",
+    items: [
+      { label: "导入 MIDI", shortcut: "Ctrl+O", action: "file-open-midi" },
+      { label: "打开工程", shortcut: "Ctrl+Shift+O", action: "file-open-project" },
+      { label: "保存工程", shortcut: "Ctrl+S", action: "file-save-project" },
+      { label: "导出 MIDI", shortcut: "Ctrl+Shift+S", action: "file-export-midi" },
+      { label: "关闭窗口", shortcut: "Ctrl+W", action: "window-close" },
+    ],
+  },
+  {
+    key: "edit",
+    label: "编辑",
+    accessKey: "E",
+    items: [
+      { label: "撤销", shortcut: "Ctrl+Z", action: "edit-undo" },
+      { label: "重做", shortcut: "Ctrl+Y", action: "edit-redo" },
+    ],
+  },
+  {
+    key: "view",
+    label: "视图",
+    accessKey: "V",
+    items: [
+      { label: "重新检测运行环境", action: "view-check-environment" },
+      { label: "设置", action: "view-settings" },
+    ],
+  },
+  {
+    key: "window",
+    label: "窗口",
+    accessKey: "W",
+    items: [
+      { label: "最小化", action: "window-minimize" },
+      { label: "最大化 / 还原", action: "window-maximize" },
+    ],
+  },
+  {
+    key: "plugins",
+    label: "插件",
+    accessKey: "P",
+    items: [
+      { label: "插件管理", action: "plugins-settings" },
+    ],
+  },
+  {
+    key: "help",
+    label: "帮助",
+    accessKey: "H",
+    items: [
+      { label: "关于 M Agent", action: "help-about" },
+      { label: "设置", action: "help-settings" },
+    ],
+  },
 ];
 
 interface MidiNote {
@@ -453,6 +527,7 @@ interface AppProps {
 
 export default function App({ initialAppearance, themePresets }: AppProps) {
   const [projectTitle, setProjectTitle] = useState("Ruins After Rain");
+  useEffect(() => { document.title = `${projectTitle} · M Agent`; }, [projectTitle]);
   const [projectPpq, setProjectPpq] = useState(PPQ);
   const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
   const [tracks, setTracks] = useState<MidiTrack[]>(() => cloneTracks(initialTracks));
@@ -474,6 +549,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   ]);
   const [prompt, setPrompt] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const menuBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [appearance, setAppearance] = useState<AppearancePreferences>(initialAppearance);
@@ -791,6 +868,22 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [deleteSelectedNote, redo, undo]);
+
+  useEffect(() => {
+    if (!activeMenu) return;
+    const closeOnClickOutside = (event: MouseEvent) => {
+      if (menuBarRef.current && !menuBarRef.current.contains(event.target as Node)) setActiveMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActiveMenu(null);
+    };
+    window.addEventListener("mousedown", closeOnClickOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnClickOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [activeMenu]);
 
   useLayoutEffect(() => {
     if (scrollRef.current) {
@@ -1125,6 +1218,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         objective: clean,
         project: projectPayload(),
         conversation: conversationSettings,
+        focusTrackId: selectedTrack?.id,
       });
       setMessages((items) => [...items, {
         id: uid("message"),
@@ -1215,6 +1309,41 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       if (!result.canceled) showToast("MIDI 已导出");
     } catch (error) { showToast(errorMessage(error, "导出失败")); }
   };
+
+  const runMenuAction = useCallback((action: string) => {
+    setActiveMenu(null);
+    if (action === "file-open-midi") void handleOpen();
+    else if (action === "file-open-project") void handleOpenProject();
+    else if (action === "file-save-project") void handleSaveProject();
+    else if (action === "file-export-midi") void handleExport();
+    else if (action === "edit-undo") undo();
+    else if (action === "edit-redo") redo();
+    else if (action === "view-check-environment") void refreshEnvironment();
+    else if (action === "view-settings") { setSettingsSection("general"); setSettingsOpen(true); }
+    else if (action === "window-minimize") void magent?.minimizeWindow();
+    else if (action === "window-maximize") void magent?.toggleMaximizeWindow();
+    else if (action === "window-close") void magent?.closeWindow();
+    else if (action === "plugins-settings") { setSettingsSection("plugins"); setSettingsOpen(true); }
+    else if (action === "help-about") showToast("M Agent · 面向独立游戏开发者的桌面 MIDI 创作 Agent");
+    else if (action === "help-settings") { setSettingsSection("general"); setSettingsOpen(true); }
+  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, magent, redo, refreshEnvironment, showToast, undo]);
+
+  useEffect(() => {
+    const onMenuShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select")) return;
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      if (key === "o" && !event.shiftKey) { event.preventDefault(); void handleOpen(); }
+      else if (key === "o" && event.shiftKey) { event.preventDefault(); void handleOpenProject(); }
+      else if (key === "s" && !event.shiftKey) { event.preventDefault(); void handleSaveProject(); }
+      else if (key === "s" && event.shiftKey) { event.preventDefault(); void handleExport(); }
+      else if (key === "w") { event.preventDefault(); void magent?.closeWindow(); }
+    };
+    window.addEventListener("keydown", onMenuShortcut);
+    return () => window.removeEventListener("keydown", onMenuShortcut);
+  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, magent]);
 
   const saveKey = async () => {
     const clean = apiKey.trim();
@@ -1560,19 +1689,35 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       <header className="titlebar">
         <div className="brand" aria-label="M Agent">
           <span className="brand-mark">M<span>/</span>A</span>
-          <span className="brand-name">MIDI AGENT</span>
-        </div>
-        <div className="project-title">
-          <span className="unsaved-dot" />
-          {projectTitle}
-          <span className="project-format">.magent</span>
-        </div>
-        <div className="title-actions">
-          <button className="quiet-button" onClick={handleOpen}><Icon name="folder" />导入 MIDI</button>
-          <button className="quiet-button" onClick={handleOpenProject}>打开工程</button>
-          <button className="quiet-button" onClick={handleSaveProject}>保存工程</button>
-          <button className="quiet-button" onClick={handleExport}><Icon name="download" />导出 MIDI</button>
-          <button className="icon-button" aria-label="设置" onClick={() => { setSettingsSection("general"); setSettingsOpen(true); }}><Icon name="settings" /></button>
+          <nav className="menu-bar" ref={menuBarRef} aria-label="应用菜单">
+            {menuGroups.map((group) => (
+              <div key={group.key} className={`menu-group ${activeMenu === group.key ? "open" : ""}`}>
+                <button
+                  type="button"
+                  className="menu-trigger"
+                  aria-expanded={activeMenu === group.key}
+                  onClick={() => setActiveMenu((current) => current === group.key ? null : group.key)}
+                >{group.label}<span className="menu-access">({group.accessKey})</span></button>
+                {activeMenu === group.key && (
+                  <div className="menu-panel" role="menu">
+                    {group.items.map((item) => (
+                      <button
+                        key={`${group.key}-${item.label}`}
+                        type="button"
+                        className="menu-item"
+                        role="menuitem"
+                        disabled={item.disabled}
+                        onClick={() => item.action && runMenuAction(item.action)}
+                      >
+                        <span>{item.label}</span>
+                        {item.shortcut && <kbd>{item.shortcut}</kbd>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </nav>
         </div>
       </header>
 
@@ -1936,7 +2081,16 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         }}
                       />
                     </label>
-                    <p className="conversation-budget-note">ChatGPT 订阅连接在当前 Pi 版本中不支持单轮 Token 硬上限，因此会在每轮结束后按累计用量停止。</p>
+                    <label className="settings-row">
+                      <div><strong>工程注入方式</strong><span>选择注入全部轨道以获取完整工程，或仅注入概览与当前选中轨道的音符明细以节省 Token。</span></div>
+                      <select
+                        value={conversationSettings.projectInjection}
+                        data-conversation-setting="project-injection"
+                        onChange={(event) => setConversationSettings((current) => ({ ...current, projectInjection: event.target.value as ConversationSettings["projectInjection"] }))}
+                      >
+                        {PROJECT_INJECTION_MODES.map((mode) => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
+                      </select>
+                    </label>
                   </section>
                   <section className="settings-group shell-settings" id="shell-settings">
                     <div className="settings-group-heading"><div><strong>Shell 路径</strong><span>选择应用统一使用的 Bash、Windows PowerShell 或 PowerShell 7。只有检测通过后才会保存并生效。</span></div></div>
