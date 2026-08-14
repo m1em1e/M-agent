@@ -2,6 +2,7 @@
 
 > 状态基线：2026-08-14
 > 范围：M/agent 轻量 MIDI 试听 + 音源导入。不做 DAW 级混音、效果器与 VST3 host。
+> 换机续接：见 [CONTINUATION.md](CONTINUATION.md)（含 SFZ/VST3/Agent 集成的下一步入口）。
 
 ## 设计原则
 
