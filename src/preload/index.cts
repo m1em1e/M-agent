@@ -40,6 +40,11 @@ const bridge: MagentBridge = {
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  listInstruments: () => ipcRenderer.invoke("instrument-library:list"),
+  addInstrument: (type: "soundfont" | "sfz", path?: string) => ipcRenderer.invoke("instrument-library:add", type, path),
+  updateInstrument: (id: string, patch: { name?: string; enabled?: boolean }) => ipcRenderer.invoke("instrument-library:update", id, patch),
+  removeInstrument: (id: string) => ipcRenderer.invoke("instrument-library:remove", id),
+  readInstrumentFile: (path: string) => ipcRenderer.invoke("instrument-library:read-file", path),
 };
 
 contextBridge.exposeInMainWorld("magent", bridge);

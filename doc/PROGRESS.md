@@ -83,7 +83,7 @@
   - 主题目录已提供插件主题贡献的合并与校验边界：插件主题必须使用 `pluginId/themeId` 命名空间，只能提供白名单内的语义颜色变量，且不能覆盖内置主题。当前尚未从插件系统实际载入贡献。
   - 供应商：OpenAI API Key 与 ChatGPT Plus/Pro OAuth。
   - 用量：当前只显示本地会话概览，明确标记精确 Token/费用尚未接入。
-  - 音源：显示当前 Web Audio 内置合成器，SoundFont/VST 标记为尚未接入。
+  - 音源：已支持 SoundFont（.sf2/.sf3）导入、音色分配与轻量试听；SFZ 仅登记、VST 未接入。
   - 插件：显示插件系统规划状态，不扫描或执行第三方插件。
 
 认证和环境行为的完整说明见 [ENVIRONMENT_AND_AUTH.md](ENVIRONMENT_AND_AUTH.md)。

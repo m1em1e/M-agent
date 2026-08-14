@@ -29,6 +29,8 @@ export function rendererPayloadToProject(payload: RendererProjectPayload): MidiP
       program: track.program,
       muted: track.muted,
       solo: track.solo,
+      volume: track.volume,
+      instrument: track.instrument,
       notes: track.notes,
     }),
   );
@@ -116,6 +118,12 @@ function assertTrackShapes(tracks: unknown[], context: string): void {
       || typeof value.solo !== "boolean" || !Array.isArray(value.notes)) {
       throw new Error(`${context}的第 ${trackIndex + 1} 条轨道结构无效。`);
     }
+    if (value.volume !== undefined && (typeof value.volume !== "number" || !Number.isFinite(value.volume))) {
+      throw new Error(`${context}的第 ${trackIndex + 1} 条轨道音量无效。`);
+    }
+    if (value.instrument !== undefined && !isInstrumentReference(value.instrument)) {
+      throw new Error(`${context}的第 ${trackIndex + 1} 条轨道音源引用无效。`);
+    }
     noteCount += value.notes.length;
     if (noteCount > 200_000) throw new Error(`${context}的音符数量超过上限。`);
     for (const [noteIndex, note] of value.notes.entries()) {
@@ -134,4 +142,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isTrackRole(value: unknown): value is RendererProjectPayload["tracks"][number]["role"] {
   return value === "melody" || value === "harmony" || value === "bass" || value === "drums" || value === "other";
+}
+
+function isInstrumentReference(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "soundfont") {
+    return typeof value.libraryId === "string"
+      && typeof value.bank === "number"
+      && typeof value.program === "number";
+  }
+  if (value.type === "sfz") {
+    return typeof value.libraryId === "string"
+      && (value.presetId === undefined || typeof value.presetId === "string");
+  }
+  return false;
 }

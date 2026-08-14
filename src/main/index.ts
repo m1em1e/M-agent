@@ -21,6 +21,7 @@ import { getPiCredentialStore } from "./pi-credential-store.js";
 import { checkAndSaveConfiguredShell, getConfiguredShellSettings } from "./shell-service.js";
 import { registerSubscriptionIpc } from "./subscription-ipc.js";
 import { registerUsageIpc } from "./usage-ipc.js";
+import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -220,6 +221,7 @@ ipcMain.handle("window:close", (event) => {
 
 registerSubscriptionIpc();
 registerUsageIpc();
+registerInstrumentLibraryIpc();
 
 app.whenReady().then(() => {
   void (async () => {

@@ -13,6 +13,7 @@
 - 启动环境诊断，以及订阅档案形式的供应商管理：可从 Pi / CC Switch 导入、新建或从预设添加，支持 OpenAI Completions / Responses、Anthropic Messages、Google Generative AI 四种 API 类型
 - 主进程统一 Shell 配置，支持 Bash、Windows PowerShell 和 PowerShell 7 的浏览、检测与启动告警
 - 分为通用、供应商、用量、音源、插件五个板块的设置中心；通用页提供可折叠的主题列表（默认、Nord、Tokyo Night、Warn Paper、High Contrast）及深色、浅色、跟随主题模式
+- 轻量试听音源系统：可导入 SoundFont（.sf2/.sf3）并分配音色到轨道，支持轨道音量；SFZ 仅登记，VST3 未接入（见 [音源系统状态](doc/INSTRUMENTS.md)）
 - 无在线认证时使用 Pi faux Provider 提供离线演示
 
 ## 开发

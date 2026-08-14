@@ -19,6 +19,8 @@ import type {
 } from "../shared/bridge";
 import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent, TickRange, TimeSignatureEvent } from "../shared/midi";
 import type { ShellCheckResult } from "../shared/shell";
+import type { InstrumentLibrarySummary, InstrumentReference } from "../shared/instrument";
+import { AudioEngine } from "./audio/audio-engine";
 import {
   SUBSCRIPTION_API_TYPES,
   subscriptionApiTypeLabel,
@@ -163,6 +165,8 @@ interface MidiTrack {
   program: number;
   muted: boolean;
   solo: boolean;
+  volume?: number;
+  instrument?: InstrumentReference;
   notes: MidiNote[];
 }
 
@@ -219,6 +223,23 @@ const BAR_COUNT = 16;
 const MIN_PITCH = 36;
 const MAX_PITCH = 96;
 const ROW_HEIGHT = 18;
+
+/** 拍号分母 → 合法分子集合（按乐理惯例） */
+const TIME_SIGNATURE_NUMERATORS: Readonly<Record<number, readonly number[]>> = {
+  1: [1, 2, 3, 4],
+  2: [2, 3, 4, 6],
+  4: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  8: [3, 5, 6, 7, 9, 12],
+  16: [3, 6, 12],
+  32: [6, 12],
+};
+const TIME_SIGNATURE_DENOMINATORS = [1, 2, 4, 8, 16, 32] as const;
+
+function normalizeTimeSignatureNumerator(numerator: number, denominator: number): number {
+  const allowed = TIME_SIGNATURE_NUMERATORS[denominator] ?? TIME_SIGNATURE_NUMERATORS[4];
+  if (allowed.includes(numerator)) return numerator;
+  return allowed.reduce((best, value) => (Math.abs(value - numerator) < Math.abs(best - numerator) ? value : best));
+}
 const KEY_WIDTH = 68;
 const RULER_HEIGHT = 30;
 const CANVAS_HEIGHT = RULER_HEIGHT + (MAX_PITCH - MIN_PITCH + 1) * ROW_HEIGHT;
@@ -369,6 +390,8 @@ const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.ma
   program: track.program,
   muted: track.muted,
   solo: track.solo,
+  volume: track.volume ?? 1,
+  instrument: track.instrument,
   notes: track.notes.map((note) => ({ ...note })),
 }));
 
@@ -403,14 +426,25 @@ const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sou
   };
 };
 
-const toProjectPayload = (title: string, ppq: number, tempo: number, tracks: MidiTrack[], metadata: ProjectMetadata | null): RendererProjectPayload => ({
+const toProjectPayload = (
+  title: string,
+  ppq: number,
+  tempo: number,
+  timeSigNumerator: number,
+  timeSigDenominator: number,
+  tracks: MidiTrack[],
+  metadata: ProjectMetadata | null,
+): RendererProjectPayload => ({
   ...(metadata ? {
     id: metadata.id,
     tempoMap: [
       { tick: 0, bpm: tempo },
       ...metadata.tempoMap.filter((event) => event.tick !== 0).map((event) => ({ ...event })),
     ],
-    timeSignatures: metadata.timeSignatures.map((event) => ({ ...event })),
+    timeSignatures: [
+      { tick: 0, numerator: timeSigNumerator, denominator: timeSigDenominator },
+      ...metadata.timeSignatures.filter((event) => event.tick !== 0).map((event) => ({ ...event })),
+    ],
     loopRegion: metadata.loopRegion ? { ...metadata.loopRegion } : null,
     revisions: metadata.revisions.map((revision) => ({ ...revision })),
     agentSessions: metadata.agentSessions.map((session) => ({
@@ -537,6 +571,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [zoom, setZoom] = useState(1);
   const [gridTicks, setGridTicks] = useState(PPQ / 4);
   const [tempo, setTempo] = useState(104);
+  const [timeSigNumerator, setTimeSigNumerator] = useState(4);
+  const [timeSigDenominator, setTimeSigDenominator] = useState(4);
+  const [timeSigOpen, setTimeSigOpen] = useState<null | "numerator" | "denominator">(null);
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState<AgentMode>("goal");
@@ -551,6 +588,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [agentBusy, setAgentBusy] = useState(false);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
+  const timeSigRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [appearance, setAppearance] = useState<AppearancePreferences>(initialAppearance);
@@ -562,6 +600,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [workspaceLayout, setWorkspaceLayout] = useState(loadWorkspaceLayoutPreferences);
   const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth);
   const [resizingPane, setResizingPane] = useState<WorkspacePane | null>(null);
+  const [instrumentLibrary, setInstrumentLibrary] = useState<InstrumentLibrarySummary[]>([]);
+  const audioEngineRef = useRef<AudioEngine | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [environment, setEnvironment] = useState<StartupEnvironmentReport | null>(null);
   const [environmentError, setEnvironmentError] = useState<string | null>(null);
@@ -590,7 +630,6 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const startTickRef = useRef(0);
   const lastTickRef = useRef(0);
   const currentPlayheadRef = useRef(0);
-  const audioRef = useRef<AudioContext | null>(null);
 
   const beatWidth = 54 * zoom;
   const canvasWidth = KEY_WIDTH + BAR_COUNT * BEATS_PER_BAR * beatWidth;
@@ -599,8 +638,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const magent = (window as unknown as { magent?: MagentBridge }).magent;
 
   const projectPayload = useCallback(
-    (): RendererProjectPayload => toProjectPayload(projectTitle, projectPpq, tempo, tracks, projectMetadata),
-    [projectMetadata, projectPpq, projectTitle, tempo, tracks],
+    (): RendererProjectPayload => toProjectPayload(projectTitle, projectPpq, tempo, timeSigNumerator, timeSigDenominator, tracks, projectMetadata),
+    [projectMetadata, projectPpq, projectTitle, tempo, timeSigDenominator, timeSigNumerator, tracks],
   );
 
   const showToast = useCallback((message: string) => {
@@ -870,6 +909,22 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   }, [deleteSelectedNote, redo, undo]);
 
   useEffect(() => {
+    if (!timeSigOpen) return;
+    const closeOnClickOutside = (event: MouseEvent) => {
+      if (timeSigRef.current && !timeSigRef.current.contains(event.target as Node)) setTimeSigOpen(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setTimeSigOpen(null);
+    };
+    window.addEventListener("mousedown", closeOnClickOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnClickOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [timeSigOpen]);
+
+  useEffect(() => {
     if (!activeMenu) return;
     const closeOnClickOutside = (event: MouseEvent) => {
       if (menuBarRef.current && !menuBarRef.current.contains(event.target as Node)) setActiveMenu(null);
@@ -1008,28 +1063,88 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   useEffect(drawCanvas, [drawCanvas]);
 
-  const soundNote = useCallback((pitch: number, velocity: number, durationMs = 120) => {
+  const getAudioEngine = useCallback((): AudioEngine | null => {
+    if (!audioEngineRef.current) audioEngineRef.current = new AudioEngine();
+    return audioEngineRef.current;
+  }, []);
+
+  const loadInstrumentLibrary = useCallback(async () => {
+    if (!magent?.listInstruments) return;
     try {
-      const AudioCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AudioCtor) return;
-      const audio = audioRef.current ?? new AudioCtor();
-      audioRef.current = audio;
-      const oscillator = audio.createOscillator();
-      const gain = audio.createGain();
-      oscillator.type = "triangle";
-      oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
-      const now = audio.currentTime;
-      const volume = (velocity / 127) * 0.045;
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), now + 0.006);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + durationMs / 1000);
-      oscillator.connect(gain).connect(audio.destination);
-      oscillator.start(now);
-      oscillator.stop(now + durationMs / 1000 + 0.02);
+      setInstrumentLibrary(await magent.listInstruments());
+    } catch (error) {
+      showToast(errorMessage(error, "读取音源库失败"));
+    }
+  }, [magent, showToast]);
+
+  useEffect(() => { void loadInstrumentLibrary(); }, [loadInstrumentLibrary]);
+
+  const addInstrumentToLibrary = async (type: "soundfont" | "sfz") => {
+    if (!magent?.addInstrument) return showToast("桌面音源桥尚未连接");
+    try {
+      const entry = await magent.addInstrument(type);
+      if (entry) {
+        await loadInstrumentLibrary();
+        showToast(`已导入音源：${entry.name}`);
+      }
+    } catch (error) {
+      showToast(errorMessage(error, "导入音源失败"));
+    }
+  };
+
+  const toggleInstrumentEnabled = async (entry: InstrumentLibrarySummary) => {
+    if (!magent?.updateInstrument) return;
+    try {
+      await magent.updateInstrument(entry.id, { enabled: !entry.enabled });
+      await loadInstrumentLibrary();
+    } catch (error) {
+      showToast(errorMessage(error, "更新音源状态失败"));
+    }
+  };
+
+  const removeInstrumentFromLibrary = async (entry: InstrumentLibrarySummary) => {
+    if (!magent?.removeInstrument) return;
+    try {
+      await magent.removeInstrument(entry.id);
+      await loadInstrumentLibrary();
+      showToast(`已移除音源：${entry.name}`);
+    } catch (error) {
+      showToast(errorMessage(error, "移除音源失败"));
+    }
+  };
+
+  /** 按 track 的音源引用播放一个音符；无引用时回退振荡器。 */
+  const playTrackNote = useCallback(async (track: MidiTrack, note: MidiNote, durationMs: number) => {
+    const engine = getAudioEngine();
+    if (!engine) return;
+    try {
+      const soundFont = track.instrument?.type === "soundfont"
+        ? instrumentLibrary.find((entry) => entry.id === track.instrument!.libraryId && entry.enabled)
+        : undefined;
+      if (soundFont) {
+        await engine.loadSoundFont(soundFont.id, soundFont.path, async (path) => {
+          if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
+          return magent.readInstrumentFile(path);
+        });
+      }
+      await engine.noteOn({
+        channel: track.channel,
+        note: note.pitch,
+        velocity: note.velocity,
+        durationMs,
+        volume: track.volume ?? 1,
+        soundFont: track.instrument?.type === "soundfont"
+          ? {
+              libraryId: track.instrument.libraryId,
+              bank: track.instrument.bank,
+              program: track.instrument.program,
+            }
+          : undefined,
+      });
     } catch {
       // Audition is optional; editing remains available when audio is unavailable.
     }
-  }, []);
+  }, [getAudioEngine, instrumentLibrary, magent]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -1053,7 +1168,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         if (track.muted || (soloActive && !track.solo)) return;
         track.notes.forEach((note) => {
           if (note.startTick >= previous && note.startTick < tick) {
-            soundNote(note.pitch, note.velocity, Math.min(300, (note.durationTicks / projectPpq) * (60000 / tempo)));
+            void playTrackNote(track, note, Math.min(300, (note.durationTicks / projectPpq) * (60000 / tempo)));
           }
         });
       });
@@ -1063,7 +1178,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [isPlaying, projectPpq, soundNote, tempo, tracks]);
+  }, [isPlaying, playTrackNote, projectPpq, tempo, tracks]);
 
   const canvasPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1093,7 +1208,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const hit = noteAtPoint(x, y);
     if (hit) {
       setSelectedNoteId(hit.id);
-      soundNote(hit.pitch, hit.velocity);
+      void playTrackNote(selectedTrack, hit, 160);
       const noteX = KEY_WIDTH + (hit.startTick / projectPpq) * beatWidth;
       const noteW = Math.max(4, (hit.durationTicks / projectPpq) * beatWidth - 2);
       setDrag({
@@ -1117,7 +1232,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       };
       commitTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, notes: [...track.notes, note] } : track));
       setSelectedNoteId(note.id);
-      soundNote(note.pitch, note.velocity);
+      void playTrackNote(selectedTrack, note, 160);
     } else {
       setSelectedNoteId(null);
     }
@@ -1161,7 +1276,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const note: MidiNote = { id: uid("note"), pitch: pitchAtY(y), startTick: Math.max(0, tickAtX(x)), durationTicks: projectPpq, velocity: 88 };
     commitTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, notes: [...track.notes, note] } : track));
     setSelectedNoteId(note.id);
-    soundNote(note.pitch, note.velocity);
+    void playTrackNote(selectedTrack, note, 160);
   };
 
   const addTrack = () => {
@@ -1274,6 +1389,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     });
     setGridTicks(Math.max(1, Math.round(result.project.ppq / 4)));
     setTempo(result.project.tempoMap[0]?.bpm ?? 120);
+    const signature = result.project.timeSignatures[0];
+    setTimeSigDenominator(signature?.denominator ?? 4);
+    setTimeSigNumerator(normalizeTimeSignatureNumerator(signature?.numerator ?? 4, signature?.denominator ?? 4));
     setSelectedTrackId(loadedTracks[0]?.id ?? "");
     setSelectedNoteId(null);
     setPlayhead(0);
@@ -1753,7 +1871,59 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           <div className="position-readout">{playPosition}</div>
         </div>
         <label className="transport-field"><span>BPM</span><input type="number" min="40" max="240" value={tempo} onChange={(event) => setTempo(clamp(Number(event.target.value), 40, 240))} /></label>
-        <div className="transport-field"><span>拍号</span><strong>4 / 4</strong></div>
+        <div className="transport-field"><span>拍号</span>
+          <div className="time-signature" ref={timeSigRef}>
+            <div className="time-sig-field">
+              <button
+                type="button"
+                className="time-sig-trigger"
+                aria-expanded={timeSigOpen === "numerator"}
+                onClick={() => setTimeSigOpen((current) => current === "numerator" ? null : "numerator")}
+              >{timeSigNumerator}</button>
+              {timeSigOpen === "numerator" && (
+                <div className="time-sig-menu" role="listbox" aria-label="拍号分子">
+                  {(TIME_SIGNATURE_NUMERATORS[timeSigDenominator] ?? TIME_SIGNATURE_NUMERATORS[4]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="option"
+                      aria-selected={timeSigNumerator === value}
+                      className={timeSigNumerator === value ? "active" : ""}
+                      onClick={() => { setTimeSigNumerator(value); setTimeSigOpen(null); }}
+                    >{value}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <i>/</i>
+            <div className="time-sig-field">
+              <button
+                type="button"
+                className="time-sig-trigger"
+                aria-expanded={timeSigOpen === "denominator"}
+                onClick={() => setTimeSigOpen((current) => current === "denominator" ? null : "denominator")}
+              >{timeSigDenominator}</button>
+              {timeSigOpen === "denominator" && (
+                <div className="time-sig-menu" role="listbox" aria-label="拍号分母">
+                  {TIME_SIGNATURE_DENOMINATORS.map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="option"
+                      aria-selected={timeSigDenominator === value}
+                      className={timeSigDenominator === value ? "active" : ""}
+                      onClick={() => {
+                        setTimeSigDenominator(value);
+                        setTimeSigNumerator((current) => normalizeTimeSignatureNumerator(current, value));
+                        setTimeSigOpen(null);
+                      }}
+                    >{value}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
         <div className="transport-divider" />
         <div className="tool-switch" aria-label="编辑工具">
           <button className={tool === "pointer" ? "active" : ""} onClick={() => setTool("pointer")} title="选择与拖动"><Icon name="pointer" /></button>
@@ -1806,6 +1976,52 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <div className="inspector-label">SELECTED TRACK</div>
             <label><span>名称</span><input value={selectedTrack?.name ?? ""} onChange={(event) => setTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, name: event.target.value } : track))} onBlur={() => setPast((history) => history)} /></label>
             <label><span>角色</span><select value={selectedTrack?.role ?? "other"} onChange={(event) => updateTrack(selectedTrackId, { role: event.target.value as TrackRole })}><option value="melody">Melody</option><option value="harmony">Harmony</option><option value="bass">Bass</option><option value="drums">Drums</option><option value="other">Other</option></select></label>
+            <label><span>音量</span><input type="range" min="0" max="1" step="0.01" value={selectedTrack?.volume ?? 1} onChange={(event) => updateTrack(selectedTrackId, { volume: Number(event.target.value) })} /></label>
+            <label><span>音色</span>
+              <select value={selectedTrack?.instrument?.type === "soundfont" ? `soundfont:${selectedTrack.instrument.libraryId}:${selectedTrack.instrument.bank}:${selectedTrack.instrument.program}` : "none"} onChange={(event) => {
+                const value = event.target.value;
+                if (value === "none") { updateTrack(selectedTrackId, { instrument: undefined }); return; }
+                const parts = value.slice("soundfont:".length).split(":");
+                const libraryId = parts[0];
+                const bank = Number(parts[1]);
+                const program = Number(parts[2]);
+                updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId, bank, program } });
+              }}>
+                <option value="none">默认（振荡器）</option>
+                {instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled).map((entry) => {
+                  const presets = entry.presets ?? [];
+                  if (presets.length === 0) {
+                    return <option key={entry.id} value={`soundfont:${entry.id}:0:${selectedTrack?.program ?? 0}`}>{entry.name} · Program {selectedTrack?.program ?? 0}</option>;
+                  }
+                  return (
+                    <optgroup key={entry.id} label={entry.name}>
+                      {presets.map((preset) => (
+                        <option key={`${entry.id}:${preset.bank}:${preset.program}`} value={`soundfont:${entry.id}:${preset.bank}:${preset.program}`}>{preset.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </label>
+            {selectedTrack?.instrument?.type === "soundfont" && (
+              <label><span>音色号</span>
+                <select value={`${selectedTrack.instrument.bank}:${selectedTrack.instrument.program}`} onChange={(event) => {
+                  const [bank, program] = event.target.value.split(":").map(Number);
+                  updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId: selectedTrack.instrument!.libraryId, bank, program } });
+                }}>
+                  {(() => {
+                    const entry = instrumentLibrary.find((item) => item.id === selectedTrack.instrument!.libraryId);
+                    const presets = entry?.type === "soundfont" ? (entry.presets ?? []) : [];
+                    if (presets.length === 0) {
+                      return <option value={`${selectedTrack.instrument!.bank}:${selectedTrack.instrument!.program}`}>使用默认音色</option>;
+                    }
+                    return presets.map((preset) => (
+                      <option key={`${preset.bank}:${preset.program}`} value={`${preset.bank}:${preset.program}`}>{preset.name}</option>
+                    ));
+                  })()}
+                </select>
+              </label>
+            )}
             {selectedNote ? (
               <div className="note-inspector">
                 <div className="inspector-label">SELECTED NOTE</div>
@@ -2303,10 +2519,44 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               {settingsSection === "sound" && (
                 <div className="settings-pane">
                   <section className="settings-group">
-                    <div className="settings-group-heading"><div><strong>试听音源</strong><span>当前钢琴卷帘尝试使用浏览器内置振荡器进行无依赖试听。</span></div><span className="availability-badge preview">当前实现</span></div>
-                    <div className="settings-row"><div><strong>内置合成器</strong><span>Web Audio Oscillator · 实际可用性取决于系统音频环境</span></div><span className="provider-state">默认试听路径</span></div>
+                    <div className="settings-group-heading"><div><strong>音源库</strong><span>导入 SoundFont（.sf2/.sf3）或 SFZ 音色文件用于轻量试听。高级混音与效果请导出 MIDI 后在专业 DAW 中处理。</span></div></div>
+                    <div className="subscription-toolbar">
+                      <div>
+                        <button className="quiet-button" onClick={() => void addInstrumentToLibrary("soundfont")}><Icon name="plus" />添加 SoundFont</button>
+                        <button className="quiet-button" onClick={() => void addInstrumentToLibrary("sfz")}><Icon name="plus" />添加 SFZ</button>
+                      </div>
+                    </div>
+                    {instrumentLibrary.length === 0 ? (
+                      <div className="settings-empty subscription-empty">
+                        <Icon name="music" size={24} />
+                        <strong>暂无音源</strong>
+                        <p>点击上方按钮导入本机的 .sf2 / .sf3 / .sfz 音色文件，然后在轨道检查器中为轨道分配音色。</p>
+                      </div>
+                    ) : (
+                      <div className="subscription-list">
+                        {instrumentLibrary.map((entry) => (
+                          <div key={entry.id} className={entry.enabled ? "subscription-card active" : "subscription-card"}>
+                            <div className="subscription-card-main">
+                              <div className="subscription-card-title">
+                                <strong>{entry.name}</strong>
+                                {!entry.enabled && <span className="availability-badge preview">已禁用</span>}
+                                <span className="availability-badge preview">{entry.type === "soundfont" ? "SoundFont" : "SFZ"}</span>
+                              </div>
+                              <div className="subscription-card-meta">
+                                <span title={entry.path}>{entry.path}</span>
+                                <span>{entry.type === "soundfont" ? `${entry.presetCount} 个音色` : "SFZ"}</span>
+                              </div>
+                            </div>
+                            <div className="subscription-card-actions">
+                              <button className="candidate-secondary" onClick={() => void toggleInstrumentEnabled(entry)}>{entry.enabled ? "禁用" : "启用"}</button>
+                              <button className="candidate-secondary" onClick={() => void removeInstrumentFromLibrary(entry)}>移除</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </section>
-                  <div className="settings-empty"><Icon name="music" size={24} /><strong>SoundFont 与 VST 暂未接入</strong><p>音色包选择、采样器、MIDI 输出设备和插件乐器将在后续音源系统中提供。</p></div>
+                  <div className="security-note"><Icon name="music" /><span>音源文件仅记录路径，不随工程复制；其他设备打开工程时需要重新导入同一音源。</span></div>
                 </div>
               )}
 

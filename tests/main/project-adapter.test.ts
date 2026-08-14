@@ -63,6 +63,33 @@ describe("main-process project payload boundary", () => {
     expect(() => assertProjectFile({ ppq: 480, tracks: [{}] })).toThrow(/工程文件/);
   });
 
+  it("preserves track volume and instrument references", () => {
+    const project = rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{
+        ...rendererProject.tracks[0],
+        volume: 0.6,
+        instrument: { type: "soundfont", libraryId: "lib-1", bank: 0, program: 12 },
+      }],
+    });
+    expect(project.tracks[0].volume).toBe(0.6);
+    expect(project.tracks[0].instrument).toEqual({ type: "soundfont", libraryId: "lib-1", bank: 0, program: 12 });
+  });
+
+  it("rejects invalid track instrument references", () => {
+    expect(() => rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{
+        ...rendererProject.tracks[0],
+        instrument: { type: "soundfont", libraryId: 5, bank: "x", program: 0 } as unknown as { type: "soundfont"; libraryId: string; bank: number; program: number },
+      }],
+    })).toThrow(/音源引用无效/);
+    expect(() => rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{ ...rendererProject.tracks[0], volume: "loud" } as unknown as typeof rendererProject.tracks[0]],
+    })).toThrow(/音量无效/);
+  });
+
   it("rejects malformed nested project metadata", () => {
     const normalized = rendererPayloadToProject(rendererProject);
     expect(() => assertProjectFile({ ...normalized, tempoMap: [null] })).toThrow(/速度图/);

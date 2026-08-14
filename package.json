@@ -28,6 +28,8 @@
     "nanoid": "^5.1.5",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "spessasynth_core": "^4.3.17",
+    "spessasynth_lib": "^4.3.13",
     "zod": "^4.0.17"
   },
   "devDependencies": {

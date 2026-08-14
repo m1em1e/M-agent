@@ -550,6 +550,51 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .transport-field strong { font: 500 11px "JetBrains Mono", monospace; color: #c9cbc4; }
 .transport-field input { width: 42px; border: 0; background: transparent; color: #e4e5dc; font: 500 12px "JetBrains Mono", monospace; padding: 0; }
 .transport-field input::-webkit-inner-spin-button { display: none; }
+.time-signature { display: flex; align-items: center; gap: 3px; position: relative; }
+.time-sig-field { position: relative; }
+.time-sig-trigger {
+  width: 30px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #e4e5dc;
+  font: 500 12px "JetBrains Mono", monospace;
+  text-align: center;
+  cursor: pointer;
+}
+.time-sig-trigger:hover { background: var(--surface-hover); color: var(--text); }
+.time-sig-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.time-sig-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  display: grid;
+  width: 40px;
+  max-height: 150px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-modal);
+  box-shadow: 0 12px 30px var(--shadow);
+}
+.time-sig-menu::-webkit-scrollbar { display: none; }
+.time-sig-menu button {
+  height: 23px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 11px "JetBrains Mono", monospace;
+  cursor: pointer;
+}
+.time-sig-menu button:hover { background: var(--surface-hover); color: var(--text); }
+.time-sig-menu button.active { background: var(--accent-soft); color: var(--accent); }
+.time-signature i { color: #606664; font-style: normal; }
 .transport-divider { width: 1px; height: 24px; background: var(--line); }
 .tool-switch { display: flex; align-items: center; padding: 3px; background: #0f1112; border: 1px solid var(--line); border-radius: 6px; }
 .tool-switch button { width: 29px; height: 25px; display: grid; place-items: center; color: #666c69; border-radius: 4px; }
@@ -910,7 +955,7 @@ html, body, #root { color: var(--text); background: var(--bg); }
 .transport, .editor-header { background: var(--surface-toolbar); }
 .transport-circle { background: var(--text); color: var(--bg); }
 .transport-circle:hover { background: color-mix(in srgb, var(--text) 88%, var(--accent)); }
-.position-readout, .transport-field strong, .transport-field input, .compact-select select { color: var(--text); }
+.position-readout, .transport-field strong, .transport-field input, .time-sig-trigger, .compact-select select { color: var(--text); }
 .transport-field span, .compact-select span, .engine-status, .zoom-control { color: var(--muted); }
 .tool-switch { background: var(--surface-title); }
 .tool-switch button { color: var(--muted); }

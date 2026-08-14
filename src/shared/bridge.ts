@@ -17,6 +17,7 @@ import type {
   SubscriptionInput,
   SubscriptionSummary,
 } from "./subscriptions.js";
+import type { InstrumentReference, InstrumentLibraryEntry, InstrumentLibrarySummary } from "./instrument.js";
 
 export interface RendererTrack {
   id: string;
@@ -27,6 +28,8 @@ export interface RendererTrack {
   program: number;
   muted: boolean;
   solo: boolean;
+  volume?: number;
+  instrument?: InstrumentReference;
   notes: Array<{
     id: string;
     pitch: number;
@@ -182,4 +185,9 @@ export interface MagentBridge {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
+  listInstruments(): Promise<InstrumentLibrarySummary[]>;
+  addInstrument(type: "soundfont" | "sfz", path?: string): Promise<InstrumentLibraryEntry | null>;
+  updateInstrument(id: string, patch: { name?: string; enabled?: boolean }): Promise<InstrumentLibraryEntry>;
+  removeInstrument(id: string): Promise<void>;
+  readInstrumentFile(path: string): Promise<ArrayBuffer>;
 }

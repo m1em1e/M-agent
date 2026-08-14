@@ -62,9 +62,15 @@ try {
       document.querySelector('.modal-close')?.click();
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
     }
-    const settingsButton = document.querySelector('button[aria-label="设置"]');
-    settingsButton?.click();
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    const openSettingsViaMenu = async () => {
+      const help = [...document.querySelectorAll('.menu-trigger')].find((button) => button.textContent?.includes('帮助'));
+      help?.click();
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+      const settingsItem = [...document.querySelectorAll('.menu-item')].find((button) => button.textContent?.includes('设置'));
+      settingsItem?.click();
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+    };
+    await openSettingsViaMenu();
     const settingsSections = [...document.querySelectorAll('.settings-sidebar nav button')].map((button) => button.textContent?.trim());
     const appearanceHeading = document.querySelector('.appearance-settings .settings-group-heading strong')?.textContent;
     const generalGroupHeadings = [...document.querySelectorAll('.settings-pane .settings-group-heading strong')].map((element) => element.textContent?.trim());

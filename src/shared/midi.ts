@@ -1,3 +1,5 @@
+import type { InstrumentReference } from "./instrument.js";
+
 export type TrackRole = "melody" | "harmony" | "bass" | "drums" | "other";
 
 export interface TickRange {
@@ -33,6 +35,10 @@ export interface MidiTrack {
   muted: boolean;
   solo: boolean;
   notes: MidiNote[];
+  /** 轨道音量（0–1），默认 1。 */
+  volume?: number;
+  /** 轨道音源引用（可序列化），缺省表示使用默认试听。 */
+  instrument?: InstrumentReference;
 }
 
 export interface Revision {
@@ -89,6 +95,8 @@ export interface TrackInput {
   program?: number;
   muted?: boolean;
   solo?: boolean;
+  volume?: number;
+  instrument?: InstrumentReference;
   notes?: NoteInput[];
 }
 

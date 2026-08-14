@@ -78,6 +78,8 @@ export function createMidiTrack(input: TrackInput, idFactory: IdFactory = create
     program: input.program ?? 0,
     muted: input.muted ?? false,
     solo: input.solo ?? false,
+    volume: input.volume,
+    instrument: input.instrument,
     notes: (input.notes ?? []).map((note) => createMidiNote(note, idFactory)),
   };
 }
