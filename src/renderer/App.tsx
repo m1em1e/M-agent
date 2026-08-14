@@ -130,6 +130,14 @@ const menuGroups: MenuGroup[] = [
     ],
   },
   {
+    key: "instruments",
+    label: "音源",
+    accessKey: "S",
+    items: [
+      { label: "音源库管理", action: "instruments-settings" },
+    ],
+  },
+  {
     key: "plugins",
     label: "插件",
     accessKey: "P",
@@ -1441,6 +1449,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     else if (action === "window-minimize") void magent?.minimizeWindow();
     else if (action === "window-maximize") void magent?.toggleMaximizeWindow();
     else if (action === "window-close") void magent?.closeWindow();
+    else if (action === "instruments-settings") { setSettingsSection("sound"); setSettingsOpen(true); }
     else if (action === "plugins-settings") { setSettingsSection("plugins"); setSettingsOpen(true); }
     else if (action === "help-about") showToast("M Agent · 面向独立游戏开发者的桌面 MIDI 创作 Agent");
     else if (action === "help-settings") { setSettingsSection("general"); setSettingsOpen(true); }
