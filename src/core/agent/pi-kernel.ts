@@ -111,6 +111,19 @@ const proposedChangeSetSchema = Type.Object({
   estimatedAffectedNotes: Type.Integer({ minimum: 0, maximum: 10_000 }),
 });
 
+/** 单次循环计算音高范围，避免展开参数在超大单轨上触发栈溢出。 */
+function pitchRange(notes: ReadonlyArray<{ pitch: number }>): [number, number] | null {
+  if (notes.length === 0) return null;
+  let minimum = notes[0].pitch;
+  let maximum = notes[0].pitch;
+  for (let index = 1; index < notes.length; index += 1) {
+    const pitch = notes[index].pitch;
+    if (pitch < minimum) minimum = pitch;
+    else if (pitch > maximum) maximum = pitch;
+  }
+  return [minimum, maximum];
+}
+
 function analysisSnapshot(project: Readonly<MidiProject>) {
   const notes = project.tracks.flatMap((track) => track.notes);
   const lastTick = notes.reduce(
@@ -132,9 +145,7 @@ function analysisSnapshot(project: Readonly<MidiProject>) {
       muted: track.muted,
       solo: track.solo,
       noteCount: track.notes.length,
-      pitchRange: track.notes.length
-        ? [Math.min(...track.notes.map((note) => note.pitch)), Math.max(...track.notes.map((note) => note.pitch))]
-        : null,
+      pitchRange: pitchRange(track.notes),
       endTick: track.notes.reduce(
         (maximum, note) => Math.max(maximum, note.startTick + note.durationTicks),
         0,
@@ -153,7 +164,16 @@ export function buildProjectContext(request: PiKernelRequest): string {
       return `Current project overview:\n${JSON.stringify(analysisSnapshot(request.project))}\n\nSelected track (${track.name}, id=${track.id}):\n${JSON.stringify(track)}`;
     }
   }
-  return `Current project (.magent):\n${JSON.stringify(request.project)}`;
+  return `Current project (.magent):\n${JSON.stringify(projectForPrompt(request.project))}`;
+}
+
+/**
+ * 注入给模型的工程序列化：剥离顶层 instruments（含本地绝对路径），
+ * 避免泄露文件路径；Agent 用不到音源清单（只读元数据）。
+ */
+function projectForPrompt(project: Readonly<MidiProject>): unknown {
+  const { instruments: _instruments, ...rest } = project;
+  return rest;
 }
 
 function systemPrompt(mode: AgentMode): string {

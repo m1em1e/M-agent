@@ -1,4 +1,4 @@
-import type { InstrumentReference } from "./instrument.js";
+import type { InstrumentReference, ProjectInstrument } from "./instrument.js";
 
 export type TrackRole = "melody" | "harmony" | "bass" | "drums" | "other";
 
@@ -69,6 +69,8 @@ export interface MidiProject {
   tracks: MidiTrack[];
   revisions: Revision[];
   agentSessions: AgentSession[];
+  /** 项目级音源清单（绝对路径 + 完整快照），随工程保存。 */
+  instruments?: ProjectInstrument[];
 }
 
 export interface NoteInput {

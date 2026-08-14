@@ -20,6 +20,13 @@ export function rendererPayloadToProject(payload: RendererProjectPayload): MidiP
       acceptedChangeSetIds: [...session.acceptedChangeSetIds],
     }));
   }
+  if (payload.instruments) {
+    project.instruments = payload.instruments.map((instrument) => ({
+      ...instrument,
+      presets: instrument.presets?.map((preset) => ({ ...preset })),
+      sfzRegions: instrument.sfzRegions?.map((region) => ({ ...region })),
+    }));
+  }
   project.tracks = payload.tracks.map((track, index) =>
     createMidiTrack({
       id: track.id || createId("track"),
@@ -52,6 +59,7 @@ export function assertProjectFile(value: unknown): asserts value is MidiProject 
     throw new Error("工程文件结构不完整。");
   }
   assertOptionalMetadata(value);
+  assertProjectInstruments(value);
   assertTrackShapes(value.tracks, "工程文件");
   const validation = validateProject(value as unknown as MidiProject);
   if (!validation.valid) {
@@ -68,7 +76,27 @@ export function assertRendererProjectPayload(value: unknown): asserts value is R
     throw new Error("MIDI 工程载荷缺少有效的 PPQ、速度或轨道列表。");
   }
   assertOptionalMetadata(value);
+  assertProjectInstruments(value);
   assertTrackShapes(value.tracks, "MIDI 工程载荷");
+}
+
+function assertProjectInstruments(value: Record<string, unknown>): void {
+  const instruments = value.instruments;
+  if (instruments === undefined) return;
+  if (!Array.isArray(instruments)) throw new Error("工程音源清单结构无效。");
+  if (instruments.length > 256) throw new Error("工程音源条目数量超过上限。");
+  for (const item of instruments) {
+    if (!isRecord(item)) throw new Error("工程音源条目结构无效。");
+    if (typeof item.id !== "string" || !item.id.trim()) throw new Error("工程音源 ID 无效。");
+    if (item.type !== "soundfont" && item.type !== "sfz") throw new Error("工程音源类型无效。");
+    if (typeof item.path !== "string" || !item.path.trim() || item.path.length > 1_024) {
+      throw new Error("工程音源路径无效。");
+    }
+    if (item.name !== undefined && typeof item.name !== "string") throw new Error("工程音源名称无效。");
+    if (item.presetName !== undefined && typeof item.presetName !== "string") throw new Error("工程音源预设名称无效。");
+    if (item.presets !== undefined && !Array.isArray(item.presets)) throw new Error("工程音源音色清单无效。");
+    if (item.sfzRegions !== undefined && !Array.isArray(item.sfzRegions)) throw new Error("工程音源采样区域无效。");
+  }
 }
 
 function assertOptionalMetadata(value: Record<string, unknown>): void {

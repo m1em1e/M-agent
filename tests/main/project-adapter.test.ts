@@ -95,4 +95,31 @@ describe("main-process project payload boundary", () => {
     expect(() => assertProjectFile({ ...normalized, tempoMap: [null] })).toThrow(/速度图/);
     expect(() => assertProjectFile({ ...normalized, agentSessions: [null] })).toThrow(/Agent 会话/);
   });
+
+  it("preserves project instrument manifest across the boundary", () => {
+    const project = rendererPayloadToProject({
+      ...rendererProject,
+      instruments: [{
+        id: "pinst-1",
+        type: "sfz",
+        path: "/samples/Rhodes.sfz",
+        name: "Rhodes.sfz",
+        sfzRegions: [{ samplePath: "/samples/r1.wav", lokey: 0, hikey: 127, lovel: 0, hivel: 127, keyCenter: 60, tuning: 0, volume: 0, pan: 0 }],
+      }],
+    });
+    expect(project.instruments).toHaveLength(1);
+    expect(project.instruments![0].id).toBe("pinst-1");
+    expect(project.instruments![0].sfzRegions?.[0].samplePath).toBe("/samples/r1.wav");
+  });
+
+  it("rejects invalid project instrument manifests", () => {
+    const invalid = (instruments: unknown) => ({ ...rendererProject, instruments }) as unknown as typeof rendererProject;
+    expect(() => rendererPayloadToProject(invalid([{ id: 5, type: "sfz", path: "/a.sfz" }]))).toThrow(/工程音源/);
+    expect(() => rendererPayloadToProject(invalid([{ id: "p1", type: "vst", path: "/a.vst3" }]))).toThrow(/工程音源类型无效/);
+    expect(() => rendererPayloadToProject(invalid([{ id: "p1", type: "sfz", path: "" }]))).toThrow(/工程音源路径无效/);
+    expect(() => assertProjectFile({
+      ...rendererPayloadToProject(rendererProject),
+      instruments: new Array(257).fill({ id: "p", type: "sfz", path: "/a.sfz" }),
+    })).toThrow(/数量超过上限/);
+  });
 });

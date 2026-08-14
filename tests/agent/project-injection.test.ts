@@ -58,4 +58,18 @@ describe("buildProjectContext", () => {
     expect(context).toContain("Current project (.magent):");
     expect(context).toContain('"id":"bass"');
   });
+
+  it("strips the project instruments manifest (absolute paths) from injected context", () => {
+    const withInstruments = project();
+    withInstruments.instruments = [{
+      id: "pinst-1",
+      type: "sfz",
+      path: "/Users/secret/Music/Rhodes.sfz",
+      sfzRegions: [],
+    }];
+    const context = buildProjectContext({ ...base, project: withInstruments });
+    expect(context).not.toContain("instruments");
+    expect(context).not.toContain("Rhodes.sfz");
+    expect(context).toContain('"id":"bass"');
+  });
 });

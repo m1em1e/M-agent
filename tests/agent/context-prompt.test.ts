@@ -12,6 +12,9 @@ describe("agent context prompt", () => {
       "tracks",
       "revisions",
       "agentSessions",
+      "instruments",
+      "volume",
+      "instrument",
       "research",
       "plan",
       "goal",
@@ -38,5 +41,10 @@ describe("agent context prompt", () => {
     expect(AGENT_CONTEXT_PROMPT).toMatch(/永远不能直接改写工程/);
     expect(AGENT_CONTEXT_PROMPT).toMatch(/简体中文/);
     expect(AGENT_CONTEXT_PROMPT).toMatch(/禁止编造/);
+  });
+
+  it("marks instruments as read-only and not injected into the conversation", () => {
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/音源（instrument）是只读元数据/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/不会注入到对话上下文/);
   });
 });

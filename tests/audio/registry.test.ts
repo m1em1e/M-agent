@@ -39,6 +39,21 @@ describe("InstrumentRegistry", () => {
     expect(reg.search("soundfont")).toHaveLength(0);
   });
 
+  it("carries parsed sfz regions on entries", async () => {
+    const reg = new InstrumentRegistry({
+      scan: async (path) => ({
+        id: "scan-1",
+        name: "Rhodes.sfz",
+        type: "sfz" as const,
+        presetName: "Rhodes",
+        sfzRegions: [{ samplePath: "/banks/rhodes/r1.wav", lokey: 0, hikey: 127, lovel: 0, hivel: 127, keyCenter: 60, tuning: 0, volume: 0, pan: 0 }],
+      }),
+    });
+    const entry = await reg.add("/banks/Rhodes.sfz", "sfz");
+    expect(entry.sfzRegions).toHaveLength(1);
+    expect(reg.list()[0].sfzRegions?.[0].samplePath).toBe("/banks/rhodes/r1.wav");
+  });
+
   it("supports enable/disable and search", async () => {
     const reg = registry();
     await reg.add("/a.sf2", "soundfont");

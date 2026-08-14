@@ -1,13 +1,16 @@
 import { WorkletSynthesizer } from "spessasynth_lib";
 import { SoundFontSynthHost } from "./soundfont-engine.js";
+import { SfzEngine } from "./sfz-engine.js";
+import type { SfzRegion } from "../../shared/instrument.js";
 
 /**
- * 统一轻量音频引擎：管理 AudioContext、共享 SpessaSynth 合成器，
- * 以及 track.instrument 路由。无 instrument 的轨道回退到 Web Audio 振荡器。
+ * 统一轻量音频引擎：管理 AudioContext、共享 SpessaSynth 合成器、
+ * SFZ 采样引擎，以及 track.instrument 路由。无 instrument 的轨道回退到 Web Audio 振荡器。
  */
 export class AudioEngine {
   private context: AudioContext | null = null;
   private synthHost: SoundFontSynthHost | null = null;
+  private sfzEngine: SfzEngine | null = null;
   private buffers = new Map<string, ArrayBuffer>();
 
   /** 获取（懒创建）AudioContext。 */
@@ -26,6 +29,7 @@ export class AudioEngine {
     await context.audioWorklet.addModule(rootUrl);
     const synth = new WorkletSynthesizer(context);
     this.synthHost = new SoundFontSynthHost(synth);
+    this.sfzEngine = new SfzEngine(context);
     synth.connect(context.destination);
     this.context = context;
     return context;
@@ -50,7 +54,15 @@ export class AudioEngine {
     return this.synthHost.ensureBank(libraryId, buffer);
   }
 
-  /** 播放一个音符。trackInstrument 提供 soundfont 引用时走合成器，否则振荡器。 */
+  /** 注册一个 SFZ 库（幂等）。采样按需通过 fetchBytes 懒解码。 */
+  async loadSfz(libraryId: string, regions: SfzRegion[], fetchBytes: (path: string) => Promise<ArrayBuffer>): Promise<void> {
+    const context = await this.ensureContext();
+    await context.resume();
+    if (!this.sfzEngine) return;
+    this.sfzEngine.load(libraryId, regions, fetchBytes);
+  }
+
+  /** 播放一个音符。trackInstrument 提供 soundfont/sfz 引用时走对应引擎，否则振荡器。 */
   async noteOn(options: {
     channel: number;
     note: number;
@@ -58,6 +70,7 @@ export class AudioEngine {
     durationMs?: number;
     volume: number;
     soundFont?: { libraryId: string; bank: number; program: number };
+    sfz?: { libraryId: string };
     oscillator?: boolean;
   }): Promise<void> {
     const context = await this.ensureContext();
@@ -65,6 +78,10 @@ export class AudioEngine {
     const gain = (options.velocity / 127) * Math.max(0, Math.min(1, options.volume)) * 0.9;
     if (options.soundFont && this.synthHost?.hasBank(options.soundFont.libraryId)) {
       this.synthHost.noteOn(options.channel, options.note, options.velocity, options.soundFont.bank, options.soundFont.program);
+      return;
+    }
+    if (options.sfz && this.sfzEngine) {
+      await this.sfzEngine.play(options.sfz.libraryId, options.note, options.velocity, options.durationMs ?? 200);
       return;
     }
     if (options.oscillator === false) return;
@@ -96,9 +113,11 @@ export class AudioEngine {
 
   dispose(): void {
     this.synthHost?.stopAll();
+    this.sfzEngine?.dispose();
     this.context?.close().catch(() => undefined);
     this.context = null;
     this.synthHost = null;
+    this.sfzEngine = null;
     this.buffers.clear();
   }
 }

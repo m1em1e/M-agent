@@ -19,8 +19,10 @@ import type {
 } from "../shared/bridge";
 import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent, TickRange, TimeSignatureEvent } from "../shared/midi";
 import type { ShellCheckResult } from "../shared/shell";
-import type { InstrumentLibrarySummary, InstrumentReference } from "../shared/instrument";
+import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument } from "../shared/instrument";
+import { buildProjectInstruments } from "../shared/instrument";
 import { AudioEngine } from "./audio/audio-engine";
+import { MarkdownContent } from "./markdown";
 import {
   SUBSCRIPTION_API_TYPES,
   subscriptionApiTypeLabel,
@@ -267,6 +269,27 @@ const errorMessage = (error: unknown, fallback: string) => error instanceof Erro
   ? `${fallback}：${error.message}`
   : fallback;
 
+/** 把 Agent 运行失败的错误整理成可读文本（去掉 IPC 封装与错误 JSON 噪音）。 */
+const cleanAgentError = (error: unknown): string => {
+  let message = error instanceof Error ? error.message : String(error);
+  const ipcIndex = message.indexOf("Error invoking remote method");
+  if (ipcIndex >= 0) {
+    const afterPrefix = message.slice(ipcIndex).split(":").slice(1).join(":").trim();
+    const lastError = afterPrefix.lastIndexOf("Error: ");
+    message = lastError >= 0 ? afterPrefix.slice(lastError + "Error: ".length).trim() : afterPrefix;
+  }
+  const jsonMatch = message.match(/\{[\s\S]*\}$/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as { message?: unknown };
+      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+    } catch {
+      // 无法解析 JSON 时回退到原始信息。
+    }
+  }
+  return message.trim() || "Agent 请求失败。";
+};
+
 const pattern = (
   pitches: number[],
   every: number,
@@ -442,6 +465,8 @@ const toProjectPayload = (
   timeSigDenominator: number,
   tracks: MidiTrack[],
   metadata: ProjectMetadata | null,
+  instrumentLibrary: InstrumentLibrarySummary[],
+  projectInstruments: ProjectInstrument[],
 ): RendererProjectPayload => ({
   ...(metadata ? {
     id: metadata.id,
@@ -467,6 +492,7 @@ const toProjectPayload = (
     ...track,
     notes: track.notes.map((note) => ({ ...note })),
   })),
+  instruments: buildProjectInstruments(tracks, instrumentLibrary, projectInstruments),
 });
 
 const validateNote = (note: MidiNote) =>
@@ -609,12 +635,24 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth);
   const [resizingPane, setResizingPane] = useState<WorkspacePane | null>(null);
   const [instrumentLibrary, setInstrumentLibrary] = useState<InstrumentLibrarySummary[]>([]);
+  const [instrumentLibraryLoaded, setInstrumentLibraryLoaded] = useState(false);
+  const [instrumentDropActive, setInstrumentDropActive] = useState(false);
+  const [instrumentWarningDismissed, setInstrumentWarningDismissed] = useState(() => {
+    try { return localStorage.getItem("magent.instrument-warning-dismissed") === "1"; } catch { return false; }
+  });
+  const [soundView, setSoundView] = useState<"list" | "add">("list");
+  const [projectInstruments, setProjectInstruments] = useState<ProjectInstrument[]>([]);
+  const [systemPath, setSystemPath] = useState("");
+  const [systemPathDraft, setSystemPathDraft] = useState("");
+  const [migratePrompt, setMigratePrompt] = useState<{ from: string; to: string } | null>(null);
   const audioEngineRef = useRef<AudioEngine | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [environment, setEnvironment] = useState<StartupEnvironmentReport | null>(null);
   const [environmentError, setEnvironmentError] = useState<string | null>(null);
   const [environmentBusy, setEnvironmentBusy] = useState(false);
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const modelSelectRef = useRef<HTMLDivElement>(null);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
   const [providersView, setProvidersView] = useState<"list" | "edit">("list");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
@@ -644,10 +682,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const selectedTrack = tracks.find((track) => track.id === selectedTrackId) ?? tracks[0];
   const selectedNote = selectedTrack?.notes.find((note) => note.id === selectedNoteId) ?? null;
   const magent = (window as unknown as { magent?: MagentBridge }).magent;
+  const isMac = magent?.platform === "darwin";
 
   const projectPayload = useCallback(
-    (): RendererProjectPayload => toProjectPayload(projectTitle, projectPpq, tempo, timeSigNumerator, timeSigDenominator, tracks, projectMetadata),
-    [projectMetadata, projectPpq, projectTitle, tempo, timeSigDenominator, timeSigNumerator, tracks],
+    (): RendererProjectPayload => toProjectPayload(projectTitle, projectPpq, tempo, timeSigNumerator, timeSigDenominator, tracks, projectMetadata, instrumentLibrary, projectInstruments),
+    [instrumentLibrary, projectInstruments, projectMetadata, projectPpq, projectTitle, tempo, timeSigDenominator, timeSigNumerator, tracks],
   );
 
   const showToast = useCallback((message: string) => {
@@ -898,12 +937,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select")) return;
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+      // macOS 的原生菜单处理 Cmd+Z / Cmd+Shift+Z / Cmd+Y，避免重复触发。
+      if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === "z" || event.key.toLowerCase() === "y")) {
+        if (isMac) return;
         event.preventDefault();
         event.shiftKey ? redo() : undo();
-      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
-        event.preventDefault();
-        redo();
       } else if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         deleteSelectedNote();
@@ -914,7 +952,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [deleteSelectedNote, redo, undo]);
+  }, [deleteSelectedNote, isMac, redo, undo]);
 
   useEffect(() => {
     if (!timeSigOpen) return;
@@ -947,6 +985,22 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       window.removeEventListener("keydown", closeOnEscape);
     };
   }, [activeMenu]);
+
+  useEffect(() => {
+    if (!modelMenuOpen) return;
+    const closeOnClickOutside = (event: MouseEvent) => {
+      if (modelSelectRef.current && !modelSelectRef.current.contains(event.target as Node)) setModelMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setModelMenuOpen(false);
+    };
+    window.addEventListener("mousedown", closeOnClickOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnClickOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [modelMenuOpen]);
 
   useLayoutEffect(() => {
     if (scrollRef.current) {
@@ -1082,55 +1136,146 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       setInstrumentLibrary(await magent.listInstruments());
     } catch (error) {
       showToast(errorMessage(error, "读取音源库失败"));
+    } finally {
+      setInstrumentLibraryLoaded(true);
+    }
+    if (magent?.getInstrumentSystemPath) {
+      try {
+        const path = await magent.getInstrumentSystemPath();
+        setSystemPath(path);
+        setSystemPathDraft(path);
+      } catch (error) {
+        showToast(errorMessage(error, "读取系统音源目录失败"));
+      }
     }
   }, [magent, showToast]);
 
   useEffect(() => { void loadInstrumentLibrary(); }, [loadInstrumentLibrary]);
 
-  const addInstrumentToLibrary = async (type: "soundfont" | "sfz") => {
-    if (!magent?.addInstrument) return showToast("桌面音源桥尚未连接");
+  /** 音源库非空时重置「已忽略」标记，避免移除全部音源后不再提示。 */
+  useEffect(() => {
+    if (instrumentLibrary.length === 0 && projectInstruments.length === 0) return;
+    setInstrumentWarningDismissed(false);
+    try { localStorage.removeItem("magent.instrument-warning-dismissed"); } catch { /* 忽略存储异常 */ }
+  }, [instrumentLibrary, projectInstruments]);
+
+  const dismissInstrumentWarning = () => {
+    setInstrumentWarningDismissed(true);
+    try { localStorage.setItem("magent.instrument-warning-dismissed", "1"); } catch { /* 忽略存储异常 */ }
+  };
+
+  /** 解析音源条目：工程级优先，回退系统级。 */
+  const findInstrumentEntry = useCallback((id: string): { path: string; enabled: boolean; presets?: InstrumentLibrarySummary["presets"]; sfzRegions?: InstrumentLibrarySummary["sfzRegions"] } | undefined => {
+    const projectEntry = projectInstruments.find((entry) => entry.id === id);
+    if (projectEntry) {
+      return { path: projectEntry.path, enabled: true, presets: projectEntry.presets, sfzRegions: projectEntry.sfzRegions };
+    }
+    const systemEntry = instrumentLibrary.find((entry) => entry.id === id);
+    if (systemEntry) {
+      return { path: systemEntry.path, enabled: systemEntry.enabled, presets: systemEntry.presets, sfzRegions: systemEntry.sfzRegions };
+    }
+    return undefined;
+  }, [instrumentLibrary, projectInstruments]);
+
+  const bindProjectInstrumentPaths = async (paths: string[], label: string) => {
+    if (!magent?.bindInstrumentToProject) return showToast("桌面音源桥尚未连接");
     try {
-      const entry = await magent.addInstrument(type);
-      if (entry) {
-        await loadInstrumentLibrary();
-        showToast(`已导入音源：${entry.name}`);
+      const added: ProjectInstrument[] = [];
+      for (const path of paths) {
+        if (projectInstruments.some((entry) => entry.path === path)) continue;
+        const snapshot = await magent.bindInstrumentToProject(path);
+        added.push({ id: uid("pinst"), ...snapshot });
+      }
+      if (added.length > 0) {
+        setProjectInstruments((current) => [...current, ...added]);
+        showToast(`已绑定 ${added.length} 个项目音源${added.length === 1 ? `：${added[0].name ?? added[0].path}` : ""}`);
+      } else {
+        showToast("所选文件均已在当前工程音源中");
       }
     } catch (error) {
-      showToast(errorMessage(error, "导入音源失败"));
+      showToast(errorMessage(error, `${label}失败`));
     }
   };
 
-  const toggleInstrumentEnabled = async (entry: InstrumentLibrarySummary) => {
-    if (!magent?.updateInstrument) return;
+  const addProjectInstrumentsFromDialog = async () => {
+    if (!magent?.pickInstrumentFiles) return showToast("桌面音源桥尚未连接");
     try {
-      await magent.updateInstrument(entry.id, { enabled: !entry.enabled });
-      await loadInstrumentLibrary();
+      const paths = await magent.pickInstrumentFiles();
+      if (paths.length > 0) await bindProjectInstrumentPaths(paths, "绑定工程音源");
+    } catch (error) {
+      showToast(errorMessage(error, "绑定工程音源失败"));
+    }
+  };
+
+  const addProjectInstrumentsFromDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (event.dataTransfer.files.length === 0) return;
+    const paths = Array.from(event.dataTransfer.files)
+      .map((file) => (magent?.getPathForFile ? magent.getPathForFile(file) : ""))
+      .filter(Boolean);
+    void bindProjectInstrumentPaths(paths, "绑定工程音源");
+  };
+
+  const unbindProjectInstrument = (id: string) => {
+    setProjectInstruments((current) => current.filter((entry) => entry.id !== id));
+    showToast("已从当前工程移除该音源绑定");
+  };
+
+  const setSystemInstrumentEnabled = async (entry: InstrumentLibrarySummary) => {
+    if (!magent?.setInstrumentEnabled) return;
+    try {
+      setInstrumentLibrary(await magent.setInstrumentEnabled(entry.path, !entry.enabled));
     } catch (error) {
       showToast(errorMessage(error, "更新音源状态失败"));
     }
   };
 
-  const removeInstrumentFromLibrary = async (entry: InstrumentLibrarySummary) => {
-    if (!magent?.removeInstrument) return;
+  const openSystemInstrumentFolder = async () => {
+    if (!magent?.openInstrumentFolder) return showToast("桌面音源桥尚未连接");
     try {
-      await magent.removeInstrument(entry.id);
-      await loadInstrumentLibrary();
-      showToast(`已移除音源：${entry.name}`);
+      const result = await magent.openInstrumentFolder();
+      if (!result.ok) showToast(result.error ?? "打开音源目录失败");
     } catch (error) {
-      showToast(errorMessage(error, "移除音源失败"));
+      showToast(errorMessage(error, "打开音源目录失败"));
     }
   };
 
-  /** 按 track 的音源引用播放一个音符；无引用时回退振荡器。 */
+  const applySystemPath = () => {
+    const to = systemPathDraft.trim();
+    if (!to || to === systemPath) { setSystemPathDraft(systemPath); return; }
+    setMigratePrompt({ from: systemPath, to });
+  };
+
+  const confirmSystemPathChange = async (migrate: boolean) => {
+    if (!migratePrompt || !magent?.setInstrumentSystemPath) return;
+    const { to } = migratePrompt;
+    setMigratePrompt(null);
+    try {
+      const result = await magent.setInstrumentSystemPath(to, migrate);
+      setSystemPath(result.path);
+      setSystemPathDraft(result.path);
+      await loadInstrumentLibrary();
+      showToast(result.migrated ? "已迁移音源到新目录" : "已更改系统音源目录");
+    } catch (error) {
+      showToast(errorMessage(error, "修改系统音源目录失败"));
+    }
+  };
+
+  /** 按 track 的音源引用播放一个音符；无引用或音源不可用时回退振荡器。 */
   const playTrackNote = useCallback(async (track: MidiTrack, note: MidiNote, durationMs: number) => {
     const engine = getAudioEngine();
     if (!engine) return;
     try {
-      const soundFont = track.instrument?.type === "soundfont"
-        ? instrumentLibrary.find((entry) => entry.id === track.instrument!.libraryId && entry.enabled)
-        : undefined;
-      if (soundFont) {
-        await engine.loadSoundFont(soundFont.id, soundFont.path, async (path) => {
+      const entry = track.instrument ? findInstrumentEntry(track.instrument.libraryId) : undefined;
+      const usable = Boolean(entry && entry.enabled);
+      if (track.instrument?.type === "soundfont" && usable && entry) {
+        await engine.loadSoundFont(track.instrument.libraryId, entry.path, async (path) => {
+          if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
+          return magent.readInstrumentFile(path);
+        });
+      }
+      if (track.instrument?.type === "sfz" && usable && entry) {
+        await engine.loadSfz(track.instrument.libraryId, entry.sfzRegions ?? [], async (path) => {
           if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
           return magent.readInstrumentFile(path);
         });
@@ -1141,18 +1286,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         velocity: note.velocity,
         durationMs,
         volume: track.volume ?? 1,
-        soundFont: track.instrument?.type === "soundfont"
+        soundFont: track.instrument?.type === "soundfont" && usable
           ? {
               libraryId: track.instrument.libraryId,
               bank: track.instrument.bank,
               program: track.instrument.program,
             }
           : undefined,
+        sfz: track.instrument?.type === "sfz" && usable ? { libraryId: track.instrument.libraryId } : undefined,
       });
     } catch {
       // Audition is optional; editing remains available when audio is unavailable.
     }
-  }, [getAudioEngine, instrumentLibrary, magent]);
+  }, [findInstrumentEntry, getAudioEngine, magent]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -1353,8 +1499,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         ? []
         : response.candidates.map((changeSet, index) => candidateFromChangeSet(changeSet, index, requestMode)));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Agent 请求失败。";
-      setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `请求失败：${message} 工程未发生修改。` }]);
+      setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `请求失败：${cleanAgentError(error)}。工程未发生修改。` }]);
       setCandidates([]);
     } finally {
       setAgentBusy(false);
@@ -1382,6 +1527,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
     const loadedTracks = projectToTracks(result.project);
     setTracks(loadedTracks);
+    setProjectInstruments(result.project.instruments?.map((instrument) => ({ ...instrument })) ?? []);
     setProjectTitle(result.project.title || "Untitled");
     setProjectPpq(result.project.ppq);
     setProjectMetadata({
@@ -1457,6 +1603,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   useEffect(() => {
     const onMenuShortcut = (event: KeyboardEvent) => {
+      // macOS 由原生菜单加速键处理，避免与 in-app 快捷键重复触发。
+      if (isMac) return;
       const target = event.target as HTMLElement | null;
       if (target?.matches("input, textarea, select")) return;
       const mod = event.ctrlKey || event.metaKey;
@@ -1470,7 +1618,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
     window.addEventListener("keydown", onMenuShortcut);
     return () => window.removeEventListener("keydown", onMenuShortcut);
-  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, magent]);
+  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, isMac, magent]);
+
+  // macOS 原生菜单动作转发到 runMenuAction。
+  useEffect(() => {
+    if (!magent?.onMenuAction) return;
+    return magent.onMenuAction(runMenuAction);
+  }, [magent, runMenuAction]);
+
+  // 测试/自动化钩子：允许通过 window 事件触发菜单动作（例如 Electron smoke 在原生菜单模式下打开设置）。
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const action = (event as CustomEvent<string>).detail;
+      if (action) runMenuAction(action);
+    };
+    window.addEventListener("magent:menu-action", handler);
+    return () => window.removeEventListener("magent:menu-action", handler);
+  }, [runMenuAction]);
 
   const saveKey = async () => {
     const clean = apiKey.trim();
@@ -1640,6 +1804,26 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
   };
 
+  /** 在对话界面切换当前订阅使用的模型并持久化。 */
+  const setActiveModel = async (modelId: string) => {
+    if (!activeSubscription || !magent?.updateSubscription) return;
+    try {
+      await magent.updateSubscription(activeSubscription.id, {
+        name: activeSubscription.name,
+        providerId: activeSubscription.providerId,
+        apiType: activeSubscription.apiType,
+        baseUrl: activeSubscription.baseUrl,
+        models: activeSubscription.models,
+        activeModelId: modelId,
+      });
+      setModelMenuOpen(false);
+      await loadSubscriptions();
+      showToast(`已切换模型：${modelId}`);
+    } catch (error) {
+      showToast(errorMessage(error, "切换模型失败"));
+    }
+  };
+
   const importExistingSubscriptions = async () => {
     if (!magent?.importSubscriptions) return showToast("桌面导入桥尚未连接");
     setSubscriptionBusy(true);
@@ -1769,10 +1953,20 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const environmentMessages = environmentError
     ? [{ id: "environment-report", message: environmentError, instruction: "请重新检测；若问题持续，请重新启动应用。", action: "repair-app" as const }]
     : environment?.issues ?? [];
+  const showInstrumentWarning = instrumentLibraryLoaded && instrumentLibrary.length === 0 && projectInstruments.length === 0 && !instrumentWarningDismissed;
+  const alertCount = (environmentMessages.length > 0 ? 1 : 0) + (showInstrumentWarning ? 1 : 0);
   const openAIStatus = environment?.providers.find((provider) => provider.id === "openai");
   const codexStatus = environment?.providers.find((provider) => provider.id === "openai-codex");
   const online = environment?.agentReady ?? false;
   const activeSubscription = subscriptions.find((subscription) => subscription.isActive);
+  const activeModelId = activeSubscription
+    ? (activeSubscription.activeModelId ?? activeSubscription.models[0]?.id ?? "")
+    : "";
+  const activeModelLabel = (() => {
+    if (!activeSubscription) return "";
+    const model = activeSubscription.models.find((item) => item.id === activeModelId);
+    return model?.name || activeModelId || "未选择模型";
+  })();
   const providerLabel = activeSubscription
     ? activeSubscription.name
     : environment?.activeProvider === "openai"
@@ -1812,40 +2006,42 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   );
 
   return (
-    <div className={`app-shell ${environmentMessages.length ? "has-environment-alert" : ""}`}>
-      <header className="titlebar">
-        <div className="brand" aria-label="M Agent">
-          <span className="brand-mark">M<span>/</span>A</span>
-          <nav className="menu-bar" ref={menuBarRef} aria-label="应用菜单">
-            {menuGroups.map((group) => (
-              <div key={group.key} className={`menu-group ${activeMenu === group.key ? "open" : ""}`}>
-                <button
-                  type="button"
-                  className="menu-trigger"
-                  aria-expanded={activeMenu === group.key}
-                  onClick={() => setActiveMenu((current) => current === group.key ? null : group.key)}
-                >{group.label}<span className="menu-access">({group.accessKey})</span></button>
-                {activeMenu === group.key && (
-                  <div className="menu-panel" role="menu">
-                    {group.items.map((item) => (
-                      <button
-                        key={`${group.key}-${item.label}`}
-                        type="button"
-                        className="menu-item"
-                        role="menuitem"
-                        disabled={item.disabled}
-                        onClick={() => item.action && runMenuAction(item.action)}
-                      >
-                        <span>{item.label}</span>
-                        {item.shortcut && <kbd>{item.shortcut}</kbd>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </nav>
-        </div>
+    <div className={`app-shell ${isMac ? "macos" : ""} ${alertCount === 1 ? "has-one-alert" : alertCount === 2 ? "has-two-alerts" : ""}`}>
+      <header className={`titlebar ${isMac ? "macos" : ""}`}>
+        {!isMac && (
+          <div className="brand" aria-label="M Agent">
+            <span className="brand-mark">M<span>/</span>A</span>
+            <nav className="menu-bar" ref={menuBarRef} aria-label="应用菜单">
+              {menuGroups.map((group) => (
+                <div key={group.key} className={`menu-group ${activeMenu === group.key ? "open" : ""}`}>
+                  <button
+                    type="button"
+                    className="menu-trigger"
+                    aria-expanded={activeMenu === group.key}
+                    onClick={() => setActiveMenu((current) => current === group.key ? null : group.key)}
+                  >{group.label}<span className="menu-access">({group.accessKey})</span></button>
+                  {activeMenu === group.key && (
+                    <div className="menu-panel" role="menu">
+                      {group.items.map((item) => (
+                        <button
+                          key={`${group.key}-${item.label}`}
+                          type="button"
+                          className="menu-item"
+                          role="menuitem"
+                          disabled={item.disabled}
+                          onClick={() => item.action && runMenuAction(item.action)}
+                        >
+                          <span>{item.label}</span>
+                          {item.shortcut && <kbd>{item.shortcut}</kbd>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </nav>
+          </div>
+        )}
       </header>
 
       {environmentMessages.length > 0 && (
@@ -1864,6 +2060,20 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             )}
           </div>
           <button disabled={environmentBusy} onClick={() => void refreshEnvironment()}>{environmentBusy ? "检测中…" : "重新检测"}</button>
+        </section>
+      )}
+
+      {showInstrumentWarning && (
+        <section className="instrument-alert" role="alert" aria-live="polite">
+          <Icon name="warning" />
+          <div>
+            <strong>尚未配置音源</strong>
+            <span>为获得真实音色试听，请在设置 → 音源 中「添加」工程音源，或把音源文件放入系统级音源库目录（打开文件夹）后扫描；未配置时轨道使用默认振荡器。</span>
+          </div>
+          <div className="instrument-alert-actions">
+            <button onClick={() => { setSettingsSection("sound"); setSettingsOpen(true); }}>配置音源</button>
+          </div>
+          <button className="instrument-alert-close" onClick={dismissInstrumentWarning} aria-label="关闭音源提示"><Icon name="close" size={12} /></button>
         </section>
       )}
 
@@ -1987,9 +2197,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <label><span>角色</span><select value={selectedTrack?.role ?? "other"} onChange={(event) => updateTrack(selectedTrackId, { role: event.target.value as TrackRole })}><option value="melody">Melody</option><option value="harmony">Harmony</option><option value="bass">Bass</option><option value="drums">Drums</option><option value="other">Other</option></select></label>
             <label><span>音量</span><input type="range" min="0" max="1" step="0.01" value={selectedTrack?.volume ?? 1} onChange={(event) => updateTrack(selectedTrackId, { volume: Number(event.target.value) })} /></label>
             <label><span>音色</span>
-              <select value={selectedTrack?.instrument?.type === "soundfont" ? `soundfont:${selectedTrack.instrument.libraryId}:${selectedTrack.instrument.bank}:${selectedTrack.instrument.program}` : "none"} onChange={(event) => {
+              <select value={selectedTrack?.instrument?.type === "soundfont" ? `soundfont:${selectedTrack.instrument.libraryId}:${selectedTrack.instrument.bank}:${selectedTrack.instrument.program}` : selectedTrack?.instrument?.type === "sfz" ? `sfz:${selectedTrack.instrument.libraryId}` : "none"} onChange={(event) => {
                 const value = event.target.value;
                 if (value === "none") { updateTrack(selectedTrackId, { instrument: undefined }); return; }
+                if (value.startsWith("sfz:")) {
+                  updateTrack(selectedTrackId, { instrument: { type: "sfz", libraryId: value.slice("sfz:".length) } });
+                  return;
+                }
                 const parts = value.slice("soundfont:".length).split(":");
                 const libraryId = parts[0];
                 const bank = Number(parts[1]);
@@ -1997,19 +2211,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                 updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId, bank, program } });
               }}>
                 <option value="none">默认（振荡器）</option>
-                {instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled).map((entry) => {
+                {[...instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled), ...projectInstruments.filter((entry) => entry.type === "soundfont")].map((entry) => {
+                  const isProject = projectInstruments.some((item) => item.id === entry.id);
                   const presets = entry.presets ?? [];
                   if (presets.length === 0) {
-                    return <option key={entry.id} value={`soundfont:${entry.id}:0:${selectedTrack?.program ?? 0}`}>{entry.name} · Program {selectedTrack?.program ?? 0}</option>;
+                    return <option key={entry.id} value={`soundfont:${entry.id}:0:${selectedTrack?.program ?? 0}`}>{entry.name}{isProject ? "（工程）" : ""} · Program {selectedTrack?.program ?? 0}</option>;
                   }
                   return (
-                    <optgroup key={entry.id} label={entry.name}>
+                    <optgroup key={entry.id} label={`${entry.name}${isProject ? "（工程）" : ""}`}>
                       {presets.map((preset) => (
                         <option key={`${entry.id}:${preset.bank}:${preset.program}`} value={`soundfont:${entry.id}:${preset.bank}:${preset.program}`}>{preset.name}</option>
                       ))}
                     </optgroup>
                   );
                 })}
+                {[...instrumentLibrary.filter((entry) => entry.type === "sfz" && entry.enabled), ...projectInstruments.filter((entry) => entry.type === "sfz")].map((entry) => (
+                  <option key={entry.id} value={`sfz:${entry.id}`}>{entry.name}{projectInstruments.some((item) => item.id === entry.id) ? "（工程）" : ""}</option>
+                ))}
               </select>
             </label>
             {selectedTrack?.instrument?.type === "soundfont" && (
@@ -2019,8 +2237,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId: selectedTrack.instrument!.libraryId, bank, program } });
                 }}>
                   {(() => {
-                    const entry = instrumentLibrary.find((item) => item.id === selectedTrack.instrument!.libraryId);
-                    const presets = entry?.type === "soundfont" ? (entry.presets ?? []) : [];
+                    const entry = findInstrumentEntry(selectedTrack.instrument!.libraryId);
+                    const presets = entry?.presets ?? [];
                     if (presets.length === 0) {
                       return <option value={`${selectedTrack.instrument!.bank}:${selectedTrack.instrument!.program}`}>使用默认音色</option>;
                     }
@@ -2131,7 +2349,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                       {message.thinking.map((thinking, index) => <p key={`${message.id}-thinking-${index}`}>{thinking}</p>)}
                     </details>
                   )}
-                  <p className="message-answer">{message.text}</p>
+                  <div className="message-answer"><MarkdownContent text={message.text} /></div>
                 </div>
               </div>
             ))}
@@ -2160,7 +2378,24 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           </div>
 
           <div className="prompt-area">
-            <div className="prompt-context"><span>{selectedTrack ? `范围：${selectedTrack.name}` : "范围：全曲"}</span><span>{mode === "goal" ? `最多 ${conversationSettings.goalMaxTurns} 轮` : modeMeta[mode].short}</span></div>
+            <div className="prompt-context">
+              <span>{selectedTrack ? `范围：${selectedTrack.name}` : "范围：全曲"}</span>
+              {activeSubscription && activeSubscription.models.length > 0 && (
+                <div className="model-select" ref={modelSelectRef}>
+                  <button type="button" className="model-select-trigger" aria-expanded={modelMenuOpen} aria-haspopup="listbox" onClick={() => setModelMenuOpen((value) => !value)}>
+                    <Icon name="spark" size={11} /><span className="model-select-label">{activeModelLabel}</span><span className="model-select-caret">▾</span>
+                  </button>
+                  {modelMenuOpen && (
+                    <div className="model-select-menu" role="listbox" aria-label="选择模型">
+                      {activeSubscription.models.map((model) => (
+                        <button key={model.id} type="button" role="option" aria-selected={model.id === activeModelId} className={model.id === activeModelId ? "active" : ""} onClick={() => void setActiveModel(model.id)}>{model.name}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <span>{mode === "goal" ? `最多 ${conversationSettings.goalMaxTurns} 轮` : modeMeta[mode].short}</span>
+            </div>
             <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} placeholder={mode === "research" ? "询问和声、结构或循环问题…" : mode === "plan" ? "描述想要的修改，生成执行计划…" : "例如：让第 7–8 小节更空旷，保持无缝循环…"} />
             <button className="send-button" disabled={!prompt.trim() || agentBusy} onClick={sendPrompt} aria-label="发送"><Icon name="send" /></button>
           </div>
@@ -2527,45 +2762,116 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
               {settingsSection === "sound" && (
                 <div className="settings-pane">
-                  <section className="settings-group">
-                    <div className="settings-group-heading"><div><strong>音源库</strong><span>导入 SoundFont（.sf2/.sf3）或 SFZ 音色文件用于轻量试听。高级混音与效果请导出 MIDI 后在专业 DAW 中处理。</span></div></div>
-                    <div className="subscription-toolbar">
-                      <div>
-                        <button className="quiet-button" onClick={() => void addInstrumentToLibrary("soundfont")}><Icon name="plus" />添加 SoundFont</button>
-                        <button className="quiet-button" onClick={() => void addInstrumentToLibrary("sfz")}><Icon name="plus" />添加 SFZ</button>
+                  {soundView === "list" ? (
+                    <>
+                      <div className="subscription-toolbar">
+                        <div>
+                          <button className="quiet-button" onClick={() => void loadInstrumentLibrary()}><Icon name="spark" size={13} />扫描音源库</button>
+                        </div>
+                        <button className="primary-button" onClick={() => setSoundView("add")}><Icon name="plus" />添加</button>
                       </div>
-                    </div>
-                    {instrumentLibrary.length === 0 ? (
-                      <div className="settings-empty subscription-empty">
-                        <Icon name="music" size={24} />
-                        <strong>暂无音源</strong>
-                        <p>点击上方按钮导入本机的 .sf2 / .sf3 / .sfz 音色文件，然后在轨道检查器中为轨道分配音色。</p>
-                      </div>
-                    ) : (
-                      <div className="subscription-list">
-                        {instrumentLibrary.map((entry) => (
-                          <div key={entry.id} className={entry.enabled ? "subscription-card active" : "subscription-card"}>
-                            <div className="subscription-card-main">
-                              <div className="subscription-card-title">
-                                <strong>{entry.name}</strong>
-                                {!entry.enabled && <span className="availability-badge preview">已禁用</span>}
-                                <span className="availability-badge preview">{entry.type === "soundfont" ? "SoundFont" : "SFZ"}</span>
+                      {instrumentLibrary.length + projectInstruments.length === 0 ? (
+                        <div className="settings-empty subscription-empty">
+                          <Icon name="music" size={24} />
+                          <strong>暂无音源</strong>
+                          <p>点击右上角「添加」绑定当前工程音源，或把音源文件放入系统级音源库目录（音源库 → 打开文件夹）后点击「扫描音源库」。</p>
+                        </div>
+                      ) : (
+                        <div className="subscription-list">
+                          {instrumentLibrary.map((entry) => (
+                            <div key={entry.id} className={entry.enabled ? "subscription-card active" : "subscription-card"}>
+                              <div className="subscription-card-main">
+                                <div className="subscription-card-title">
+                                  <strong>{entry.name}</strong>
+                                  {!entry.enabled && <span className="availability-badge preview">已禁用</span>}
+                                  <span className="availability-badge preview">{entry.type === "soundfont" ? "SoundFont" : "SFZ"}</span>
+                                  <span className="availability-badge preview">系统级</span>
+                                </div>
+                                <div className="subscription-card-meta">
+                                  <span title={entry.path}>{entry.path}</span>
+                                  <span>{entry.type === "soundfont" ? `${entry.presetCount} 个音色` : `${entry.sfzRegions?.length ?? 0} 个采样区域`}</span>
+                                </div>
                               </div>
-                              <div className="subscription-card-meta">
-                                <span title={entry.path}>{entry.path}</span>
-                                <span>{entry.type === "soundfont" ? `${entry.presetCount} 个音色` : "SFZ"}</span>
+                              <div className="subscription-card-actions">
+                                <button className="candidate-secondary" onClick={() => void setSystemInstrumentEnabled(entry)}>{entry.enabled ? "禁用" : "启用"}</button>
                               </div>
                             </div>
-                            <div className="subscription-card-actions">
-                              <button className="candidate-secondary" onClick={() => void toggleInstrumentEnabled(entry)}>{entry.enabled ? "禁用" : "启用"}</button>
-                              <button className="candidate-secondary" onClick={() => void removeInstrumentFromLibrary(entry)}>移除</button>
+                          ))}
+                          {projectInstruments.map((entry) => (
+                            <div key={entry.id} className="subscription-card">
+                              <div className="subscription-card-main">
+                                <div className="subscription-card-title">
+                                  <strong>{entry.name ?? entry.path.split(/[\\/]/).pop()}</strong>
+                                  <span className="availability-badge preview">{entry.type === "soundfont" ? "SoundFont" : "SFZ"}</span>
+                                  <span className="availability-badge ready">工程</span>
+                                </div>
+                                <div className="subscription-card-meta">
+                                  <span title={entry.path}>{entry.path}</span>
+                                  <span>{entry.type === "soundfont" ? `${entry.presets?.length ?? 0} 个音色` : `${entry.sfzRegions?.length ?? 0} 个采样区域`}</span>
+                                </div>
+                              </div>
+                              <div className="subscription-card-actions">
+                                <button className="candidate-secondary" onClick={() => unbindProjectInstrument(entry.id)}>移除绑定</button>
+                              </div>
                             </div>
+                          ))}
+                        </div>
+                      )}
+                      <div className="security-note"><Icon name="music" /><span>音源文件仅记录路径，不随工程复制；项目迁移至其他电脑后，工程音源绑定会失效。</span></div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="subscription-editor-head">
+                        <strong>新建音源库</strong>
+                        <div className="subscription-editor-head-actions">
+                          <button className="candidate-secondary" onClick={() => setSoundView("list")}>返回列表</button>
+                        </div>
+                      </div>
+                      <section className="settings-group">
+                        <div className="settings-group-heading"><div><strong>项目级音源库</strong><span>绑定当前工程专用的音源，绑定随工程一起保存。注意事项：项目迁移至其他电脑会导致音源绑定的失效。</span></div></div>
+                        <div
+                          className={`instrument-dropzone ${instrumentDropActive ? "drag-over" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          aria-label="绑定工程音源：点击选择文件，或将 .sf2/.sf3/.sfz 文件拖入此区域"
+                          onClick={() => void addProjectInstrumentsFromDialog()}
+                          onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void addProjectInstrumentsFromDialog(); } }}
+                          onDragOver={(event) => { event.preventDefault(); setInstrumentDropActive(true); }}
+                          onDragLeave={(event) => { if (event.currentTarget.contains(event.relatedTarget as Node)) return; setInstrumentDropActive(false); }}
+                          onDrop={(event) => { setInstrumentDropActive(false); addProjectInstrumentsFromDrop(event); }}
+                        >
+                          <Icon name="plus" size={18} />
+                          <strong>点击选择，或将 .sf2 / .sf3 / .sfz 文件拖入此处</strong>
+                          <span>绑定即生效，保存工程时随工程一起保存；可在轨道检查器中为轨道分配这些音色。</span>
+                        </div>
+                        {projectInstruments.length > 0 && (
+                          <p className="shell-settings-note">当前工程已绑定 {projectInstruments.length} 个项目音源，可在音源列表查看与移除绑定。</p>
+                        )}
+                      </section>
+                      <section className="settings-group">
+                        <div className="settings-group-heading"><div><strong>系统级音源库</strong><span>存放于系统目录，所有工程共享；把音源文件放入该目录后点击「扫描音源库」即可使用。</span></div>
+                          <button className="candidate-secondary" onClick={() => void openSystemInstrumentFolder()}><Icon name="folder" size={13} />打开文件夹</button>
+                        </div>
+                      </section>
+                      <section className="settings-group">
+                        <div className="settings-group-heading"><div><strong>系统级音源库路径</strong><span>默认 ~/Documents/m-agent/Instruments；修改时应用会询问是否把音源同步迁移到新目录。</span></div></div>
+                        <label className="shell-path-field">
+                          <span>目录</span>
+                          <div className="shell-path-controls">
+                            <input
+                              type="text"
+                              value={systemPathDraft}
+                              spellCheck={false}
+                              autoComplete="off"
+                              onChange={(event) => setSystemPathDraft(event.target.value)}
+                              onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); applySystemPath(); } }}
+                            />
+                            <button type="button" className="candidate-secondary" disabled={!systemPathDraft.trim() || systemPathDraft.trim() === systemPath} onClick={applySystemPath}>应用</button>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-                  <div className="security-note"><Icon name="music" /><span>音源文件仅记录路径，不随工程复制；其他设备打开工程时需要重新导入同一音源。</span></div>
+                        </label>
+                      </section>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -2579,6 +2885,29 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               )}
 
               <div className="modal-actions settings-actions"><button className="candidate-secondary" onClick={() => setSettingsOpen(false)}>关闭</button></div>
+            </div>
+          </section>
+        </div>
+      )}
+      {migratePrompt && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMigratePrompt(null); }}>
+          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="migrate-title">
+            <span className="modal-kicker">SYSTEM INSTRUMENT PATH</span>
+            <h3 id="migrate-title">更改系统音源目录</h3>
+            <p className="settings-intro">要把现有音源从当前目录同步迁移到新目录吗？</p>
+            <div className="shell-path-field">
+              <span>当前</span>
+              <code className="migrate-path">{migratePrompt.from}</code>
+            </div>
+            <div className="shell-path-field">
+              <span>新目录</span>
+              <code className="migrate-path">{migratePrompt.to}</code>
+            </div>
+            <p className="shell-settings-note">「迁移音源」会把文件移动到新目录并更新扫描缓存；「仅更改路径」只切换扫描目录，不移动文件。</p>
+            <div className="modal-actions">
+              <button className="candidate-secondary" onClick={() => setMigratePrompt(null)}>取消</button>
+              <button className="candidate-secondary" onClick={() => void confirmSystemPathChange(false)}>仅更改路径</button>
+              <button className="primary-button" onClick={() => void confirmSystemPathChange(true)}>迁移音源</button>
             </div>
           </section>
         </div>

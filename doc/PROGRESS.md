@@ -23,6 +23,12 @@
 - 撤销、重做和单事务候选应用。
 - 非 480 PPQ 工程的绘制、命中、播放、拖动和位置显示。
 - `.magent` 打开再保存时保留工程 ID、Tempo Map、拍号、循环区、修订和 Agent 会话。
+- 对话界面新增模型选择器：向上展开的下拉菜单，可切换当前激活订阅使用的模型，选择会持久化到订阅档案（`activeModelId`）。
+- Agent 运行失败的错误信息已可读化：去除 IPC 封装前缀与错误 JSON 噪音，直接显示供应商返回的 message。
+- Agent 回复采用 Markdown 渲染（`react-markdown` + `remark-gfm`，安全剥离原始 HTML，支持 GFM 表格、删除线、任务列表等）。
+- 启动时若音源库为空，顶部显示黄色可关闭警告，引导进入「设置 → 音源」配置；可与环境红色警告同时出现。
+- macOS 无应用菜单场景下补回 Cmd/Ctrl+C/V/X/A 剪贴板快捷键（主进程 `before-input-event` 分发）。
+- macOS 标题栏优化：去掉左上角 logo 与应用内菜单栏，标题栏保留给系统红绿灯按钮并居中（`--titlebar-h: 40px`）；「文件/编辑/视图/窗口/音源/插件/帮助」菜单移到 macOS 原生 Menu Bar，点击经 `menu:action` IPC 转发到渲染进程执行；Cmd+Z/Y 由原生菜单处理避免重复触发，剪贴板由菜单编辑角色处理。Windows/Linux 仍使用应用内菜单栏与 logo。
 
 ### Pi Agent
 
@@ -83,7 +89,7 @@
   - 主题目录已提供插件主题贡献的合并与校验边界：插件主题必须使用 `pluginId/themeId` 命名空间，只能提供白名单内的语义颜色变量，且不能覆盖内置主题。当前尚未从插件系统实际载入贡献。
   - 供应商：OpenAI API Key 与 ChatGPT Plus/Pro OAuth。
   - 用量：当前只显示本地会话概览，明确标记精确 Token/费用尚未接入。
-  - 音源：已支持 SoundFont（.sf2/.sf3）导入、音色分配与轻量试听；SFZ 仅登记、VST 未接入。
+  - 音源：两级音源库——系统级（托管目录，默认 ~/Documents/m-agent/Instruments，递归扫描 .sf2/.sf3/.sfz）与项目级（随 .magent 保存的 instruments 绝对路径快照，绑定即生效）；音源栏为「列表 / 新建音源库」两视图，支持打开文件夹、路径配置与迁移确认；SFZ 已实现解析与发声；VST 未接入。
   - 插件：显示插件系统规划状态，不扫描或执行第三方插件。
 
 认证和环境行为的完整说明见 [ENVIRONMENT_AND_AUTH.md](ENVIRONMENT_AND_AUTH.md)。
@@ -106,15 +112,54 @@
 - 统一 Shell 随后扩展为支持 Bash、Windows PowerShell (`powershell.exe`) 和 PowerShell 7 (`pwsh`/`pwsh.exe`)；检测与实际执行会按类型使用 `-lc` 或无配置、非交互的 `-Command` 参数。开发态 npm/Pi 探测在 Windows PowerShell 下显式使用 `.cmd` shim。
 - PowerShell 扩展同样按用户要求未执行测试、类型检查、构建或 Electron smoke。
 
+### 2026-08-15 音源与对话体验收尾
+
+- SFZ 采样：实现最小 opcode 集解析（`src/core/audio/sfz-parser.ts`）与发声引擎（`src/renderer/audio/sfz-engine.ts`），轨道可选用 SFZ 音色并试听。
+- 音源导入交互：移除「添加 SoundFont / 添加 SFZ」按钮，改为虚线放置区——点击弹多选对话框，或直接拖入 .sf2/.sf3/.sfz 文件；主进程按扩展名推断类型（`inferInstrumentTypeFromPath`），新增 `instrument-library:add-files` IPC；preload 用 `webUtils.getPathForFile` 获取拖入文件的绝对路径。
+- 对话模型选择：Agent 面板底部向上展开的模型下拉，切换当前激活订阅的模型并持久化。
+- 错误可读化：`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。
+- Markdown 渲染：改用 `react-markdown@10.1.0` + `remark-gfm@4.0.1`（新增依赖），替换手写解析器。
+- 启动音源警告：音源库为空且未关闭时，顶部显示黄色可关闭横幅，直达「设置 → 音源」。
+- 剪贴板快捷键：macOS 移除应用菜单后补回 Cmd/Ctrl+C/V/X/A。
+- 验证：`npm run typecheck`、`npm test`（25 文件 / 125 用例）、`npm run build` 均通过；桌面手工冒烟（拖入音源、模型切换、MD 表格、黄色警告）需在 `npm run dev` 下执行。
+
+### 2026-08-15 音源系统重构（两级音源库）
+
+- **系统级音源库（托管目录）**：默认 `~/Documents/m-agent/Instruments`（`app.getPath('documents')/m-agent/Instruments`，可配置）。递归扫描目录下 .sf2/.sf3/.sfz，解析结果按「路径+mtime」缓存（`src/main/audio/library-store.ts` + `system-scan.ts`），禁用状态按路径持久化；「打开文件夹」自动创建目录；修改路径时应用内确认面板询问是否迁移文件（`cp` + `rm`）。
+- **项目级音源库（随工程）**：`.magent` 新增 `instruments` 数组，保存绝对路径 + presets/sfzRegions 完整快照；添加页项目级 dropzone 绑定即生效；保存时按轨道引用自动快照（`buildProjectInstruments`，按 id 去重，工程级优先）。
+- **UI 重构**：设置 → 音源 改为「列表 / 新建音源库」两视图（镜像供应商栏）。列表 = 系统级条目（启用/禁用）+ 工程绑定条目（「工程」标记 + 移除绑定）+ 「扫描音源库」+ 右上角「添加」；新建页 = 项目级 dropzone（含迁移注意事项）+ 系统级（打开文件夹）+ 路径配置（含迁移确认面板）。轨道检查器合并系统级 + 工程级音源（工程带标记）。
+- 启动音源警告改为「系统级与工程级均为空」时提示。
+- 新增 IPC：pick-files / bind-instrument / get-set-system-path / open-system-folder / set-enabled；停用 add-files 与 update/remove。
+- 验证：`npm run typecheck`、`npm test`（26 文件 / 133 用例）、`npm run build` 通过；桌面手工冒烟需在 `npm run dev` 下执行。
+
+### 2026-08-15 macOS 原生菜单与标题栏
+
+- macOS 使用原生 Menu Bar（文件/编辑/视图/窗口/音源/插件/帮助），标题栏去掉 logo 与应用内菜单栏，高度调整使系统红绿灯按钮垂直居中。
+- 原生菜单动作经 `menu:action` IPC → preload `onMenuAction` → 渲染进程 `runMenuAction` 执行；剪贴板与窗口操作使用原生 role。
+- `npm run test:electron` 冒烟已重跑并通过（含原生菜单模式下用 `magent:menu-action` 事件打开设置的分支）；本机 Shell 探针现为 ready，`shellAlertJump: true`。
+
+### 2026-08-15 P0-1 / P0-2 关闭
+
+- **P0-1 大型工程分析栈溢出**：`src/core/agent/pi-kernel.ts` 的 `analysisSnapshot` 音高范围计算
+  由 `Math.min/max(...spread)` 改为 `pitchRange` 单次循环；新增 130,000 音符单轨回归测试
+  （`tests/agent/pi-kernel.test.ts`）。结论：200,000 音符上限下分析不再栈溢出，快照为 O(n)。
+- **P0-2 Electron 升级**：37.10.3 → 43.4.0（`npm install electron@43.4.0 --save-exact`）。
+  内置 Node 24.18.1（满足 Pi ≥22.19）；`npm audit` 归零。二进制下载需走
+  `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`（GitHub 直连 fetch 失败）。
+  回归：`npm run typecheck`、`npm test`（26 文件 / 134 用例）、`npm run build`、`npm run test:electron`
+  （Electron 43 下 smoke 需 `--remote-allow-origins=*`，已加入 `scripts/electron-smoke.mjs`）全部通过，
+  覆盖 preload sandbox、electron-store、Pi 离线内核、原生菜单与音源系统。
+- 打包链路（macOS/Windows/Linux）在 Electron 43 下尚未重跑，见 `doc/TODO.md` P2「发布与打包验证」。
+
 ### 单元与集成测试
 
 ```text
 npm test
-14 个测试文件通过
-62 项测试通过
+26 个测试文件通过
+133 项测试通过
 ```
 
-覆盖范围包括 MIDI 工程、SMF 导入导出、Agent 权限、Schema、GoalRunner、Pi kernel、main service、启动环境诊断和工程载荷边界。
+覆盖范围包括 MIDI 工程、SMF 导入导出、Agent 权限、Schema、GoalRunner、Pi kernel、main service、启动环境诊断、工程载荷边界、SFZ 解析/区域选择、音源类型推断、项目级音源快照、系统级目录扫描和 Markdown 渲染。
 
 ### 完整构建
 
@@ -178,7 +223,6 @@ npm run test:electron
 
 ## 3. 当前仓库状态
 
-- 当前分支：`master`。
-- 项目文件仍全部处于未跟踪状态。
-- 尚未创建 Git 提交、分支、远程推送或 PR。
+- 当前分支：`master`，已有历史提交；最近改动（音源两级库、模型选择、Markdown 渲染、剪贴板快捷键等）尚未提交。
+- 工作区包含本轮未提交的修改与新增文件；未创建新分支、远程推送或 PR。
 - `dist/`、`dist-electron/`、`release/` 和 `node_modules/` 均由 `.gitignore` 排除。

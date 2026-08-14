@@ -17,7 +17,7 @@ import type {
   SubscriptionInput,
   SubscriptionSummary,
 } from "./subscriptions.js";
-import type { InstrumentReference, InstrumentLibraryEntry, InstrumentLibrarySummary } from "./instrument.js";
+import type { InstrumentReference, InstrumentLibrarySummary, ProjectInstrument, ProjectInstrumentSnapshot } from "./instrument.js";
 
 export interface RendererTrack {
   id: string;
@@ -50,6 +50,8 @@ export interface RendererProjectPayload {
   tracks: RendererTrack[];
   revisions?: Revision[];
   agentSessions?: AgentSession[];
+  /** 项目级音源清单（保存时快照）。 */
+  instruments?: ProjectInstrument[];
 }
 
 export interface OpenMidiResult {
@@ -155,6 +157,10 @@ export interface StartupEnvironmentReport {
 }
 
 export interface MagentBridge {
+  /** 运行平台（process.platform 透传）。 */
+  platform: string;
+  /** 订阅主进程原生菜单触发的动作；返回取消订阅函数。 */
+  onMenuAction(callback: (action: string) => void): () => void;
   openMidi(): Promise<OpenMidiResult>;
   exportMidi(payload: RendererProjectPayload): Promise<SaveResult>;
   openProject(): Promise<OpenMidiResult>;
@@ -186,8 +192,19 @@ export interface MagentBridge {
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
   listInstruments(): Promise<InstrumentLibrarySummary[]>;
-  addInstrument(type: "soundfont" | "sfz", path?: string): Promise<InstrumentLibraryEntry | null>;
-  updateInstrument(id: string, patch: { name?: string; enabled?: boolean }): Promise<InstrumentLibraryEntry>;
-  removeInstrument(id: string): Promise<void>;
+  /** 弹出原生多选对话框，返回选中音源文件路径。 */
+  pickInstrumentFiles(): Promise<string[]>;
+  /** 解析单个音源文件为项目级快照（校验扩展名与大小，不写入任何库）。 */
+  bindInstrumentToProject(path: string): Promise<ProjectInstrumentSnapshot>;
+  /** 获取系统级音源目录绝对路径。 */
+  getInstrumentSystemPath(): Promise<string>;
+  /** 修改系统级音源目录；migrate 为 true 时把原目录文件迁移到新目录。 */
+  setInstrumentSystemPath(path: string, migrate: boolean): Promise<{ path: string; migrated: boolean }>;
+  /** 打开系统级音源目录（不存在则创建）。 */
+  openInstrumentFolder(): Promise<{ ok: boolean; error?: string }>;
+  /** 设置系统级音源条目启用状态（移除 = 仅禁用）。 */
+  setInstrumentEnabled(path: string, enabled: boolean): Promise<InstrumentLibrarySummary[]>;
+  /** 解析拖入的文件为本地绝对路径（Electron 沙箱渲染进程无法直接读取 File.path）。 */
+  getPathForFile(file: File): string;
   readInstrumentFile(path: string): Promise<ArrayBuffer>;
 }

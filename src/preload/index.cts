@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
   AgentRequestPayload,
   MagentBridge,
@@ -10,6 +10,12 @@ import type {
 } from "../shared/subscriptions.js";
 
 const bridge: MagentBridge = {
+  platform: process.platform,
+  onMenuAction: (callback: (action: string) => void) => {
+    const listener = (_event: unknown, action: string) => callback(action);
+    ipcRenderer.on("menu:action", listener);
+    return () => ipcRenderer.removeListener("menu:action", listener);
+  },
   openMidi: () => ipcRenderer.invoke("midi:open"),
   exportMidi: (payload: RendererProjectPayload) => ipcRenderer.invoke("midi:export", payload),
   openProject: () => ipcRenderer.invoke("project:open"),
@@ -41,9 +47,13 @@ const bridge: MagentBridge = {
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
   listInstruments: () => ipcRenderer.invoke("instrument-library:list"),
-  addInstrument: (type: "soundfont" | "sfz", path?: string) => ipcRenderer.invoke("instrument-library:add", type, path),
-  updateInstrument: (id: string, patch: { name?: string; enabled?: boolean }) => ipcRenderer.invoke("instrument-library:update", id, patch),
-  removeInstrument: (id: string) => ipcRenderer.invoke("instrument-library:remove", id),
+  pickInstrumentFiles: () => ipcRenderer.invoke("instrument-library:pick-files"),
+  bindInstrumentToProject: (path: string) => ipcRenderer.invoke("instrument-library:bind-instrument", path),
+  getInstrumentSystemPath: () => ipcRenderer.invoke("instrument-library:get-system-path"),
+  setInstrumentSystemPath: (path: string, migrate: boolean) => ipcRenderer.invoke("instrument-library:set-system-path", path, migrate),
+  openInstrumentFolder: () => ipcRenderer.invoke("instrument-library:open-system-folder"),
+  setInstrumentEnabled: (path: string, enabled: boolean) => ipcRenderer.invoke("instrument-library:set-enabled", path, enabled),
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   readInstrumentFile: (path: string) => ipcRenderer.invoke("instrument-library:read-file", path),
 };
 

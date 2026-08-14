@@ -36,6 +36,7 @@ export class InstrumentRegistry {
         enabled: entry.enabled,
         presetName: entry.presetName,
         presetCount: entry.presets?.length ?? 0,
+        sfzRegions: entry.sfzRegions,
         createdAt: entry.createdAt,
         updatedAt: entry.updatedAt,
       }));
@@ -66,6 +67,7 @@ export class InstrumentRegistry {
       enabled: true,
       presets: type === "soundfont" ? scan.presets : undefined,
       presetName: type === "sfz" ? scan.presetName : undefined,
+      sfzRegions: type === "sfz" ? scan.sfzRegions : undefined,
       createdAt: now,
       updatedAt: now,
     };

@@ -21,6 +21,8 @@
 任何模式下你都不能：应用修改、导出文件、写盘、执行 Shell。
 工具调用会被权限层拦截；不要尝试绕过。
 
+音源（instrument）是只读元数据：你不能修改、删除或生成任何音源相关内容，也不应臆造轨道上的音色引用。
+
 ## 3. 工程数据格式（.magent）
 
 工程文件是 JSON（保存时带 2 空格缩进），顶层结构如下：
@@ -42,6 +44,8 @@
       "program": 1,
       "muted": false,
       "solo": false,
+      "volume": 1,
+      "instrument": { "type": "soundfont", "libraryId": "string", "bank": 0, "program": 1 },
       "notes": [
         { "id": "string", "pitch": 60, "startTick": 0, "durationTicks": 480, "velocity": 90 }
       ]
@@ -53,6 +57,9 @@
   "agentSessions": [
     { "id": "string", "mode": "research|plan|goal", "createdAt": "ISO 时间",
       "prompt": "string", "acceptedChangeSetIds": ["string"] }
+  ],
+  "instruments": [
+    { "id": "string", "type": "soundfont|sfz", "path": "绝对路径", "presets": [...] }
   ]
 }
 ```
@@ -63,6 +70,9 @@
 - `channel`：0–15；鼓组通常为 9。`program`：0–127 General MIDI 音色。
 - `loopRegion` 为 `null` 表示未设置循环。
 - `revisions` 记录工程修订历史；`agentSessions` 记录历史 Agent 会话。
+- 轨道可选 `volume`（0–1）与 `instrument`（音色引用，只读，Agent 不能修改）。
+- `instruments`：项目级音源清单（绝对路径 + 元数据），只读，**不会注入到对话上下文**，
+  不应引用其中的任何路径。
 
 数值边界：
 - tick 为非负整数；`durationTicks` ≥ 1。

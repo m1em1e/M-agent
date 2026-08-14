@@ -1,70 +1,66 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, dialog, shell, BrowserWindow } from "electron";
 import { readFile } from "node:fs/promises";
-import type { InstrumentType } from "../../shared/instrument.js";
+import type { ProjectInstrumentSnapshot } from "../../shared/instrument.js";
 import {
-  addLibraryEntry,
-  listLibraryEntries,
-  removeLibraryEntry,
-  updateLibraryEntry,
+  bindInstrumentToProject,
+  ensureSystemInstrumentDirectory,
+  getSystemInstrumentPath,
+  listSystemInstruments,
+  setInstrumentEnabled,
+  setSystemInstrumentPath,
 } from "./library-store.js";
 
 const MAX_INSTRUMENT_READ_BYTES = 512 * 1024 * 1024;
+const INSTRUMENT_FILTERS = [{ name: "音源文件", extensions: ["sf2", "sf3", "sfz"] }];
 
 export function registerInstrumentLibraryIpc(): void {
-  ipcMain.handle("instrument-library:list", () => listLibraryEntries());
+  ipcMain.handle("instrument-library:list", () => listSystemInstruments());
 
-  ipcMain.handle("instrument-library:add", async (event, type: unknown, path?: unknown) => {
-    const instrumentType = parseInstrumentType(type);
-    let filePath = typeof path === "string" ? path : "";
-    if (!filePath) {
-      const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
-      const filters = instrumentType === "soundfont"
-        ? [{ name: "SoundFont", extensions: ["sf2", "sf3"] }]
-        : [{ name: "SFZ", extensions: ["sfz"] }];
-      const selected = owner
-        ? await dialog.showOpenDialog(owner, { properties: ["openFile"], filters })
-        : await dialog.showOpenDialog({ properties: ["openFile"], filters });
-      if (selected.canceled || !selected.filePaths[0]) return null;
-      filePath = selected.filePaths[0];
-    }
-    return addLibraryEntry(filePath, instrumentType);
+  ipcMain.handle("instrument-library:pick-files", async (event): Promise<string[]> => {
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const selected = owner
+      ? await dialog.showOpenDialog(owner, { properties: ["openFile", "multiSelections"], filters: INSTRUMENT_FILTERS })
+      : await dialog.showOpenDialog({ properties: ["openFile", "multiSelections"], filters: INSTRUMENT_FILTERS });
+    return selected.canceled ? [] : selected.filePaths;
   });
 
-  ipcMain.handle("instrument-library:update", (_event, id: unknown, patch: unknown) => {
-    if (typeof id !== "string" || !id) throw new Error("音源 ID 无效。");
-    return updateLibraryEntry(id, sanitizePatch(patch));
+  ipcMain.handle("instrument-library:bind-instrument", async (_event, path: unknown): Promise<ProjectInstrumentSnapshot> => {
+    const clean = assertPath(path);
+    return bindInstrumentToProject(clean);
   });
 
-  ipcMain.handle("instrument-library:remove", (_event, id: unknown) => {
-    if (typeof id !== "string" || !id) throw new Error("音源 ID 无效。");
-    removeLibraryEntry(id);
+  ipcMain.handle("instrument-library:get-system-path", () => getSystemInstrumentPath());
+
+  ipcMain.handle("instrument-library:set-system-path", async (_event, path: unknown, migrate: unknown) => {
+    const clean = assertPath(path);
+    if (typeof migrate !== "boolean") throw new Error("迁移标志无效。");
+    return setSystemInstrumentPath(clean, migrate);
+  });
+
+  ipcMain.handle("instrument-library:open-system-folder", async () => {
+    const dir = await ensureSystemInstrumentDirectory();
+    const result = await shell.openPath(dir);
+    return { ok: result === "", error: result === "" ? undefined : result };
+  });
+
+  ipcMain.handle("instrument-library:set-enabled", async (_event, path: unknown, enabled: unknown) => {
+    const clean = assertPath(path);
+    if (typeof enabled !== "boolean") throw new Error("启用状态无效。");
+    return setInstrumentEnabled(clean, enabled);
   });
 
   ipcMain.handle("instrument-library:read-file", async (_event, path: unknown) => {
-    if (typeof path !== "string" || !path) throw new Error("音源文件路径无效。");
-    const bytes = await readFile(path);
+    const clean = assertPath(path);
+    const bytes = await readFile(clean);
     if (bytes.byteLength > MAX_INSTRUMENT_READ_BYTES) throw new Error("音源文件超过大小上限。");
     // 通过 IPC 传输 ArrayBuffer（结构化克隆）。
     return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   });
 }
 
-function parseInstrumentType(value: unknown): InstrumentType {
-  if (value === "soundfont" || value === "sfz") return value;
-  throw new Error("音源类型无效。");
-}
-
-function sanitizePatch(value: unknown): Partial<{ name: string; enabled: boolean }> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("音源更新数据无效。");
-  const patch = value as Record<string, unknown>;
-  const result: Partial<{ name: string; enabled: boolean }> = {};
-  if (patch.name !== undefined) {
-    if (typeof patch.name !== "string" || !patch.name.trim()) throw new Error("音源名称无效。");
-    result.name = patch.name.trim();
-  }
-  if (patch.enabled !== undefined) {
-    if (typeof patch.enabled !== "boolean") throw new Error("音源启用状态无效。");
-    result.enabled = patch.enabled;
-  }
-  return result;
+function assertPath(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("音源文件路径无效。");
+  const clean = value.trim();
+  if (clean.length > 1_024) throw new Error("音源文件路径过长。");
+  return clean;
 }

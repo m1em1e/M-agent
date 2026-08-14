@@ -99,6 +99,11 @@ export function cloneMidiProject(project: MidiProject): MidiProject {
       ...session,
       acceptedChangeSetIds: [...session.acceptedChangeSetIds],
     })),
+    instruments: project.instruments?.map((instrument) => ({
+      ...instrument,
+      presets: instrument.presets?.map((preset) => ({ ...preset })),
+      sfzRegions: instrument.sfzRegions?.map((region) => ({ ...region })),
+    })),
   };
 }
 

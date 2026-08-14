@@ -14,6 +14,8 @@ const errors = [];
 const electron = spawn(packagedExecutable || electronPath, [
   ...(packagedExecutable ? [] : ["."]),
   `--remote-debugging-port=${port}`,
+  // 新版 Chromium 对 DevTools WebSocket 校验 Origin；允许无 Origin 的测试连接。
+  "--remote-allow-origins=*",
   `--user-data-dir=${userDataDir}`,
   "--no-first-run",
 ], {
@@ -64,11 +66,17 @@ try {
     }
     const openSettingsViaMenu = async () => {
       const help = [...document.querySelectorAll('.menu-trigger')].find((button) => button.textContent?.includes('帮助'));
-      help?.click();
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
-      const settingsItem = [...document.querySelectorAll('.menu-item')].find((button) => button.textContent?.includes('设置'));
-      settingsItem?.click();
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+      if (help) {
+        help.click();
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 30));
+        const settingsItem = [...document.querySelectorAll('.menu-item')].find((button) => button.textContent?.includes('设置'));
+        settingsItem?.click();
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
+        return;
+      }
+      // macOS 原生菜单模式下无应用内菜单栏，改用渲染进程菜单动作钩子。
+      window.dispatchEvent(new CustomEvent('magent:menu-action', { detail: 'help-settings' }));
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 80));
     };
     await openSettingsViaMenu();
     const settingsSections = [...document.querySelectorAll('.settings-sidebar nav button')].map((button) => button.textContent?.trim());

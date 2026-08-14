@@ -34,8 +34,91 @@ if (process.platform === "win32") {
   app.setAppUserModelId(isDevelopment ? "studio.magent.desktop.dev" : "studio.magent.desktop");
 }
 
-// Remove the default File/Edit/View/Window/Help application menu.
-Menu.setApplicationMenu(null);
+// 在 whenReady 中按平台安装菜单：macOS 使用原生 Menu Bar，其余平台不显示应用菜单。
+function installApplicationMenu(): void {
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+  const sendAction = (action: string) => {
+    BrowserWindow.getFocusedWindow()?.webContents.send("menu:action", action);
+  };
+  const item = (label: string, action: string, accelerator?: string): Electron.MenuItemConstructorOptions => ({
+    label,
+    ...(accelerator ? { accelerator } : {}),
+    click: () => sendAction(action),
+  });
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: "M Agent",
+      submenu: [
+        { role: "about", label: "关于 M Agent" },
+        { type: "separator" },
+        { role: "hide", label: "隐藏 M Agent" },
+        { role: "hideOthers", label: "隐藏其他" },
+        { role: "unhide", label: "全部显示" },
+        { type: "separator" },
+        { role: "quit", label: "退出 M Agent" },
+      ],
+    },
+    {
+      label: "文件",
+      submenu: [
+        item("导入 MIDI", "file-open-midi", "CmdOrCtrl+O"),
+        item("打开工程", "file-open-project", "CmdOrCtrl+Shift+O"),
+        item("保存工程", "file-save-project", "CmdOrCtrl+S"),
+        item("导出 MIDI", "file-export-midi", "CmdOrCtrl+Shift+S"),
+        { type: "separator" },
+        item("关闭窗口", "window-close", "CmdOrCtrl+W"),
+      ],
+    },
+    {
+      label: "编辑",
+      submenu: [
+        item("撤销", "edit-undo", "CmdOrCtrl+Z"),
+        item("重做", "edit-redo", "CmdOrCtrl+Shift+Z"),
+        { type: "separator" },
+        { role: "cut", label: "剪切" },
+        { role: "copy", label: "拷贝" },
+        { role: "paste", label: "粘贴" },
+        { role: "selectAll", label: "全选" },
+      ],
+    },
+    {
+      label: "视图",
+      submenu: [
+        item("重新检测运行环境", "view-check-environment"),
+        item("设置", "view-settings", "CmdOrCtrl+,"),
+        { type: "separator" },
+        { role: "togglefullscreen", label: "切换全屏" },
+      ],
+    },
+    {
+      label: "窗口",
+      submenu: [
+        { role: "minimize", label: "最小化" },
+        { role: "zoom", label: "缩放" },
+        { type: "separator" },
+        { role: "front", label: "前置全部窗口" },
+      ],
+    },
+    {
+      label: "音源",
+      submenu: [item("音源库管理", "instruments-settings")],
+    },
+    {
+      label: "插件",
+      submenu: [item("插件管理", "plugins-settings")],
+    },
+    {
+      label: "帮助",
+      submenu: [
+        item("关于 M Agent", "help-about"),
+        item("设置", "help-settings"),
+      ],
+    },
+  ]));
+}
 
 function createWindow(): void {
   const productionUrl = pathToFileURL(join(currentDir, "../../dist/index.html")).toString();
@@ -66,6 +149,8 @@ function createWindow(): void {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // macOS 已有原生菜单的编辑角色处理剪贴板快捷键；其余平台补回。
+  if (process.platform !== "darwin") registerClipboardShortcuts(window);
   window.webContents.on("will-navigate", (event, url) => {
     const allowed = isDevelopment
       ? new URL(url).origin === new URL(process.env.VITE_DEV_SERVER_URL!).origin
@@ -224,6 +309,7 @@ registerUsageIpc();
 registerInstrumentLibraryIpc();
 
 app.whenReady().then(() => {
+  installApplicationMenu();
   void (async () => {
     try {
       const legacyKey = getApiKey();
@@ -248,4 +334,31 @@ async function assertFileSize(filePath: string, maximumBytes: number, label: str
   const info = await stat(filePath);
   if (!info.isFile()) throw new Error(`${label}路径不是普通文件。`);
   if (info.size > maximumBytes) throw new Error(`${label}超过允许的大小上限。`);
+}
+
+/**
+ * 应用菜单被移除后，macOS 上 Cmd+C/V/X/A 等剪贴板快捷键会失效（Windows/Linux 由
+ * Chromium 原生处理，不受影响）。这里在主进程补回等价快捷键，保持无菜单栏设计。
+ */
+function registerClipboardShortcuts(window: BrowserWindow): void {
+  const useMeta = process.platform === "darwin";
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || input.isAutoRepeat) return;
+    const mod = useMeta ? input.meta : input.control;
+    if (!mod || input.alt) return;
+    const key = input.key.toLowerCase();
+    if (key === "v") {
+      event.preventDefault();
+      window.webContents.paste();
+    } else if (key === "c") {
+      event.preventDefault();
+      window.webContents.copy();
+    } else if (key === "x") {
+      event.preventDefault();
+      window.webContents.cut();
+    } else if (key === "a" && !input.shift) {
+      event.preventDefault();
+      window.webContents.selectAll();
+    }
+  });
 }

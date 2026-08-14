@@ -20,6 +20,25 @@ function project() {
   return value;
 }
 
+function hugeProject() {
+  const value = createMidiProject({ id: "project-huge", title: "Huge", ppq: 480, bpm: 120 });
+  value.tracks.push(createMidiTrack({
+    id: "massive",
+    name: "Massive",
+    role: "melody",
+    channel: 0,
+    program: 1,
+    notes: Array.from({ length: 130_000 }, (_, index) => ({
+      id: `n${index}`,
+      pitch: 36 + (index % 48),
+      startTick: (index % 960) * 4,
+      durationTicks: 240,
+      velocity: 80,
+    })),
+  }));
+  return value;
+}
+
 describe("Pi agent kernel", () => {
   it("enforces a read-only research tool set", async () => {
     expect([...PI_MODE_TOOLS.research]).not.toContain("propose_midi_changes");
@@ -62,5 +81,17 @@ describe("Pi agent kernel", () => {
     expect(result.candidates).toHaveLength(1);
     expect(input).toEqual(before);
     expect(result.analysis).toContain("预览");
+  });
+
+  it("handles a 130,000-note single track without stack overflow", async () => {
+    const result = await runPiKernel({
+      requestId: "huge-1",
+      mode: "research",
+      objective: "分析大工程",
+      project: hugeProject(),
+    });
+    expect(result.provider).toBe("pi-offline");
+    expect(result.candidates).toEqual([]);
+    expect(result.analysis.length).toBeGreaterThan(0);
   });
 });

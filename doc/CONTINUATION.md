@@ -1,7 +1,7 @@
 # 换机续接指南（CONTINUATION）
 
 > 用途：在另一台电脑上继续 M/agent 开发时，按本文档恢复环境并接着未完成的计划。
-> 基线提交：`adec0cb`（feat: 轻量音源系统）
+> 基线提交：`db0a124`（feat: 顶部菜单栏新增「音源(S)」菜单入口）
 
 ## 1. 环境准备（新电脑）
 
@@ -15,49 +15,33 @@ npm run build
 ```
 
 - Node 版本：仓库 CI 前建议 ≥ 22.19（Pi 内核要求；本机开发用 24.x 通过）。
-- Electron 37.10.3 会由 `npm install` 拉取；`package:win` 依赖
-  `node_modules/electron/dist`（本机曾因下载/解包失败改用 `--config.electronDist`）。
+- Electron 43.4.0 会由 `npm install` 拉取二进制；若 GitHub 直连下载失败，用
+  `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 重跑 `node node_modules/electron/install.js`。
+  `package:win` 依赖 `node_modules/electron/dist`（本机曾因下载/解包失败改用 `--config.electronDist`）。
 - 换机后若本地无 `~/.pi/agent/auth.json` 或 `~/.cc-switch/cc-switch.db`，
   供应商「导入已有」会安静地返回 0 个结果（预期行为，不阻塞）。
+- 换机后系统级音源目录（默认 `~/Documents/m-agent/Instruments`）可能为空，
+  音源栏扫描结果为空是预期行为；放入音源文件后点击「扫描音源库」即可。
 
 ## 2. 仓库结构速览
 
-- `src/main/`：Electron 主进程（窗口、IPC、环境诊断、订阅、用量、Shell、音源库）
+- `src/main/`：Electron 主进程（窗口、IPC、环境诊断、订阅、用量、Shell、两级音源库、macOS 原生菜单）
 - `src/preload/`：白名单 IPC 桥
-- `src/renderer/`：React UI（钢琴卷帘、轨道、设置五板块、菜单栏）
-- `src/core/`：纯逻辑（midi 数据/编辑、agent pi-kernel、audio 抽象）
+- `src/renderer/`：React UI（钢琴卷帘、轨道、设置五板块、macOS 标题栏/应用内菜单栏）
+- `src/core/`：纯逻辑（midi 数据/编辑、agent pi-kernel、audio 抽象、sfz-parser）
 - `src/shared/`：跨进程类型契约（midi / bridge / instrument / subscriptions 等）
 - `doc/`：设计、进展、待办、音源状态、认证、提示词
-- `tests/`：vitest 单测（22 文件 / 100 用例）
+- `tests/`：vitest 单测（26 文件 / 133 用例）
 
 ## 3. 未完成计划与下一步入口
 
 按优先级列出，每项都给出**入口文件**和**验证方式**。
 
-### 3.1 SFZ 采样实现（未完成，推荐先做）
-现状：`addInstrument("sfz", ...)` 只登记路径与 `presetName`（
-`src/main/audio/library-store.ts` 的 `sfzPresetName`），**没有**解析和发声。
-
-入口：
-- 解析器：`src/main/soundfont-parser.ts`（现只处理 SF2，可加 `parseSfz` 返回区域映射）
-- 引擎：`src/renderer/audio/` 下新增 `sfz-engine.ts`，实现 `Instrument` 接口
-- 路由：`src/renderer/audio/audio-engine.ts` 的 `noteOn` 增加 sfz 分支
-- 数据流：`src/shared/instrument.ts` 的 `InstrumentReference` 已有 `sfz` 分支
-
-调研结论（已确认，勿重复调研）：
-- **没有**维护良好的「直接播放 .sfz」的 Web 库。两个可行路线：
-  - A：自研 ~100 行解析器（覆盖 `sample/key/lokey/hikey/velocity/lovel/hivel/tuning/volume/pan/envelope`），
-    用 `smplr` `Sampler`（MIT、活跃、TS）驱动，或 Tone.js `Sampler`。
-  - B：离线用 Polyphone 把 SFZ 转 SF2，统一走 SpessaSynth（省事，但丢 SFZ 原生编辑）。
-- 可参考 `sfz-parser`（MIT，解析用，2020 后未维护）或 `@sfz-tools/core`（CC0，维护中）。
-- 采样音频解码用 Chromium 内置 `decodeAudioData`（WAV/FLAC/OGG 均可）。
-
-验证：导入 SFZ → 轨道选择器出现 SFZ 音色 → 试听发声；单测解析器区域映射。
-
 ### 3.2 音源库体验完善（P2）
-- 设置 → 音源 页（`src/renderer/App.tsx` 的 `settingsSection === "sound"`）无搜索；
-  轨道选择器平铺全部 preset，大型音源库下拉很长。可加 `presetSearch` 过滤（复用供应商预设搜索模式）。
-- 音源库文件路径变更后工程引用失效：可加「路径失效提示」或「库条目缺失时轨道回退振荡器并提示」。
+- 设置 → 音源 列表与轨道选择器仍平铺全部 preset，大型音源库下拉较长；可加 `presetSearch`
+  过滤（`src/renderer/App.tsx`，复用供应商预设搜索模式）。
+- 项目级音源为绝对路径快照，换机/移动文件后绑定失效（新建页已提示）；可加「路径失效提示」
+  或「库条目缺失时轨道回退振荡器并提示」。
 
 ### 3.3 VST3（未接入，暂缓）
 结论（已调研，勿重复）：`nvst3-host`（npm）当前不适合生产——
@@ -82,15 +66,17 @@ npm run build
 
 ## 4. 已知环境问题（非代码缺陷）
 
-- `npm run test:electron` 的 smoke 中 `shellAlertJump:false` 是本机 shell 探针报
-  「missing」导致（本机 `bash.exe` 不可用）；在 shell 可用的机器上应通过。
-- smoke 已改为通过「帮助 → 设置」菜单打开设置面板（原 `aria-label="设置"` 按钮已移除）。
+- `npm run test:electron` 的 smoke 中 `shellAlertJump` 在 Shell 探针报「missing」的机器上为
+  false（预期行为）；Shell 可用的机器上应通过（本机 `/bin/bash` ready 时已通过）。
+- smoke 已在 macOS 原生菜单模式下通过（用 `magent:menu-action` 事件打开设置面板，
+  原 `aria-label="设置"` 按钮与 in-app 菜单路径仍在 Windows/Linux 生效）。
 
 ## 5. 换机后建议的首次动作
 
 1. `npm run typecheck && npm test && npm run build` 确认基线干净。
-2. 在「音源」设置导入一个真实 `.sf2`，验证 SoundFont 试听（换机后这是最快的手工冒烟）。
-3. 接着 3.1 SFZ，或按你的优先级挑一项。
+2. 在「音源」设置打开系统级音源库文件夹，放入一个真实 `.sf2` 后「扫描音源库」，
+   验证 SoundFont 试听（换机后这是最快的手工冒烟）。
+3. 接着按第 3 节的 3.2/3.4 挑一项，或参考 `doc/TODO.md` 的优先级。
 
 ## 6. 关键文档索引
 
