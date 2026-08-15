@@ -1848,11 +1848,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
   };
 
-  const loadProjectResult = (result: OpenMidiResult, source: "MIDI" | "工程") => {
-    if (result.canceled) return;
+  const loadProjectResult = (result: OpenMidiResult, source: "MIDI" | "工程"): boolean => {
+    if (result.canceled) return false;
     if (!result.project) {
       showToast(`${source}未返回可用的工程数据`);
-      return;
+      return false;
     }
     getAudioEngine()?.stopAll();
     setIsPlaying(false);
@@ -1886,6 +1886,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setCandidates([]);
     setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `${source}已载入：${loadedTracks.length} 条轨道。${result.warnings?.length ? `另有 ${result.warnings.length} 条导入提示。` : ""}` }]);
     showToast(`${source}已载入`);
+    return true;
   };
 
   const handleOpen = async () => {
@@ -1946,12 +1947,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   /** 项目另存为：总是弹出对话框选择新路径。 */
   const saveProjectAs = () => void persistProject(null);
 
-  const openRecentProject = async (path: string) => {
-    if (!magent?.openProjectAt) return showToast("桌面文件桥尚未连接");
+  const openRecentProject = async (path: string): Promise<boolean> => {
+    if (!magent?.openProjectAt) { showToast("桌面文件桥尚未连接"); return false; }
     try {
-      loadProjectResult(await magent.openProjectAt(path), "工程");
-      void loadRecentProjects();
-    } catch (error) { showToast(errorMessage(error, "打开最近工程失败")); }
+      const loaded = loadProjectResult(await magent.openProjectAt(path), "工程");
+      if (loaded) void loadRecentProjects();
+      return loaded;
+    } catch (error) { showToast(errorMessage(error, "打开最近工程失败")); return false; }
   };
 
   const loadRecentProjects = useCallback(async () => {
@@ -2103,11 +2105,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   useEffect(() => { void loadRecentProjects(); }, [loadRecentProjects]);
 
   // 新窗口启动意图：新建 / 打开 / 导入在目标窗口内自动执行。
+  // 无显式意图时：自动打开最近一个工程；没有则新建空工程。
   useEffect(() => {
     const intent = magent?.startupIntent;
-    if (intent === "new-project") newProject();
-    else if (intent === "open-project") void handleOpenProject();
-    else if (intent === "import-midi") void handleOpen();
+    if (intent === "new-project") { newProject(); return; }
+    if (intent === "open-project") { void handleOpenProject(); return; }
+    if (intent === "import-midi") { void handleOpen(); return; }
+    if (!magent?.listRecentProjects) { newProject(); return; }
+    let cancelled = false;
+    magent.listRecentProjects()
+      .then(async (projects) => {
+        if (cancelled) return;
+        if (projects.length === 0) { newProject(); return; }
+        const opened = await openRecentProject(projects[0].path);
+        if (!opened) newProject();
+      })
+      .catch(() => { if (!cancelled) newProject(); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [magent]);
 

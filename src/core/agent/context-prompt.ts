@@ -1,7 +1,7 @@
 /**
  * 对话注入用上下文提示词：让模型理解 M Agent 应用、工程文件格式
  * 与能力边界。由 pi-kernel 在每次运行时拼接到系统提示词之后。
- * 维护版本：doc/AGENT_CONTEXT_PROMPT.md
+ * 维护版本：doc/IMPLEMENTED.md（§3 与 §9 概述；完整规则见本文件）
  */
 export const AGENT_CONTEXT_PROMPT = [
   "## 1. 你是谁",

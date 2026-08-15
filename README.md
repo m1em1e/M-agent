@@ -13,7 +13,7 @@
 - 启动环境诊断，以及订阅档案形式的供应商管理：可从 Pi / CC Switch 导入、新建或从预设添加，支持 OpenAI Completions / Responses、Anthropic Messages、Google Generative AI 四种 API 类型
 - 主进程统一 Shell 配置，支持 Bash、Windows PowerShell 和 PowerShell 7 的浏览、检测与启动告警
 - 分为通用、供应商、用量、音源、插件五个板块的设置中心；通用页提供可折叠的主题列表（默认、Nord、Tokyo Night、Warn Paper、High Contrast）及深色、浅色、跟随主题模式
-- 轻量试听音源系统：可导入 SoundFont（.sf2/.sf3）并分配音色到轨道，支持轨道音量；SFZ 仅登记，VST3 未接入（见 [音源系统状态](doc/INSTRUMENTS.md)）
+- 轻量试听音源系统：可导入 SoundFont（.sf2/.sf3）并分配音色到轨道，支持轨道音量；SFZ 仅登记，VST3 未接入（见 [IMPLEMENTED.md](doc/IMPLEMENTED.md)）
 - 无在线认证时使用 Pi faux Provider 提供离线演示
 
 ## 开发
@@ -45,7 +45,7 @@ npm run package:linux
 
 应用不会把 API Key 或 OAuth Token 写入工程文件或 Renderer 存储。供应商以“订阅档案”管理：档案元数据保存在本机，API Key 使用 Electron 系统加密能力保存；可从标准 Pi 登录文件或本机 CC Switch 数据库导入订阅（只读，不改写外部文件），并可读取 `OPENAI_API_KEY`。没有在线认证时自动使用离线演示生成器。
 
-环境检测、认证来源、优先级和当前限制见 [环境检测与供应商认证](doc/ENVIRONMENT_AND_AUTH.md)。项目路线和已知问题见 [实施计划](doc/PLAN.md)、[当前进展](doc/PROGRESS.md) 与 [尚未完成](doc/TODO.md)。
+环境检测、认证来源、优先级和当前限制见 [项目介绍](doc/OVERVIEW.md)、[已实现功能](doc/IMPLEMENTED.md) 与 [尚未完成](doc/INCOMPLETE.md)。
 
 ## 安全模型
 

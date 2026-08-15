@@ -74,4 +74,4 @@
 - `src/shared/bridge.ts` / `src/preload/index.cts`（桥方法）
 - `src/shared/menu.ts`（导出子菜单项）
 - `vite.config.*`（拷贝 WASM 编码器，仿 spessasynth worklet 拷贝）
-- `doc/PROGRESS.md` / `doc/TODO.md`（完成后记录）
+- `doc/IMPLEMENTED.md` / `doc/INCOMPLETE.md`（完成后记录）
