@@ -52,13 +52,13 @@ npm run build
 - 或先做 PoC：纯 Node 里用 nvst3-host 验证扫描/加载/State 往返后再决定。
 当前 M/agent 定位轻量试听，高级处理由用户导出 MIDI 到专业 DAW 完成，不建议近期投入。
 
-### 3.4 Agent 音源集成（原计划 Phase 4）
-现状：`src/core/agent/permissions.ts` 无音源工具；Agent 只能分析/提议 MIDI 操作。
-若要「把第三轨换成 Rhodes」：
-- `permissions.ts` 增加工具集（如 `instrument.search`、`track.set-instrument`），三模式授权。
-- `src/core/agent/pi-kernel.ts` 的 `createTools` 注册对应工具，走 `AgentToolExecutor` 权限校验。
-- 工程注入上下文（`AGENT_CONTEXT_PROMPT.ts` 与 `buildProjectContext`）增加音源摘要。
-- 验证：单测权限 + 离线假模型对话。
+### 3.4 Agent 音源集成（已完成 2026-08-15）
+Agent 可查找与提出音色更换候选：
+- 工具 `instrument_search`（系统音源库 + 工程绑定音源，按名称/类型检索，返回 SoundFont bank/program）与
+  `set_track_instrument`（生成 `update_track` 候选，`instrument` 可为引用或 null 清除）；经 `submitChangeSet`
+  走现有 Schema + 领域校验与候选上限，三模式权限继承（research 只能搜索）。
+- `update_track.changes` 现支持 `instrument`；界面候选已可**应用** `update_track`（含音色）。
+- 后续若需「模型直接操作音源库」（增删/扫描），再另行扩展；当前仅引用替换。
 
 ### 3.5 播放调度（P2，可选）
 当前 rAF 驱动逐音符触发（`src/renderer/App.tsx` 的播放 `useEffect`）。
@@ -81,6 +81,7 @@ npm run build
 ## 6. 关键文档索引
 
 - 音源系统完成/未完成清单：`doc/INSTRUMENTS.md`
+- Skill 系统（嵌套调用、7 个内置 Skill、用户自定义）：`doc/SKILLS.md`
 - 全局待办与已知问题：`doc/TODO.md`
 - 项目路线与阶段：`doc/PLAN.md`
 - 当前进展：`doc/PROGRESS.md`

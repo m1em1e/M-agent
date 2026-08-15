@@ -78,6 +78,12 @@ export class AudioEngine {
     const gain = (options.velocity / 127) * Math.max(0, Math.min(1, options.volume)) * 0.9;
     if (options.soundFont && this.synthHost?.hasBank(options.soundFont.libraryId)) {
       this.synthHost.noteOn(options.channel, options.note, options.velocity, options.soundFont.bank, options.soundFont.program);
+      // SoundFont 音符在 noteOff 前会持续延音（sustain 型音色）。按时长调度释放，
+      // 避免暂停/停止后仍无限发声。
+      const durationMs = Math.max(0, options.durationMs ?? 200);
+      if (durationMs > 0) {
+        window.setTimeout(() => this.synthHost?.noteOff(options.channel, options.note), durationMs);
+      }
       return;
     }
     if (options.sfz && this.sfzEngine) {
@@ -94,6 +100,7 @@ export class AudioEngine {
 
   stopAll(): void {
     this.synthHost?.stopAll();
+    this.sfzEngine?.stopAll();
   }
 
   private playOscillator(context: AudioContext, note: number, gain: number, durationMs: number): void {

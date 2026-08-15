@@ -18,6 +18,7 @@ import type {
   SubscriptionSummary,
 } from "./subscriptions.js";
 import type { InstrumentReference, InstrumentLibrarySummary, ProjectInstrument, ProjectInstrumentSnapshot } from "./instrument.js";
+import type { SkillTraceEntry } from "../core/agent/skills/types.js";
 
 export interface RendererTrack {
   id: string;
@@ -66,6 +67,16 @@ export interface SaveResult {
   filePath?: string;
 }
 
+/** 最近打开的项目记录。 */
+export interface RecentProject {
+  path: string;
+  title?: string;
+  openedAt: number;
+}
+
+/** 新建/打开/导入时目标窗口的选择。 */
+export type ProjectOpenIntent = "new-project" | "open-project" | "import-midi";
+
 export interface AgentRequestPayload {
   mode: AgentMode;
   objective: string;
@@ -89,6 +100,8 @@ export interface AgentResponsePayload {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   cost: number;
+  /** Skill 嵌套调用轨迹（非 skill 运行为空数组）。 */
+  skillTrace: SkillTraceEntry[];
 }
 
 export interface UsageSummary {
@@ -156,6 +169,14 @@ export interface StartupEnvironmentReport {
   issues: EnvironmentIssue[];
 }
 
+/** Agent 运行中的实时调用更新（工具开始/结束、轮次、Skill 调用、思考增量）。 */
+export type AgentLiveUpdate =
+  | { kind: "tool_start"; name: string }
+  | { kind: "tool_end"; name: string; isError?: boolean }
+  | { kind: "turn"; turns: number }
+  | { kind: "thinking"; text: string }
+  | { kind: "skill"; skill: string; parentSkill?: string; depth: number; status: string; durationMs: number };
+
 export interface MagentBridge {
   /** 运行平台（process.platform 透传）。 */
   platform: string;
@@ -177,6 +198,24 @@ export interface MagentBridge {
   browseShell(): Promise<BrowseShellResult>;
   checkShell(path: string): Promise<ShellCheckResult>;
   runAgent(payload: AgentRequestPayload): Promise<AgentResponsePayload>;
+  /** 取消当前窗口正在运行的 Agent 任务。 */
+  cancelAgent(): Promise<void>;
+  /** 订阅 Agent 运行中的实时调用更新；返回取消订阅函数。 */
+  onAgentLive(callback: (update: AgentLiveUpdate) => void): () => void;
+  /** 当前可用 Skill 列表（name + description），用于 @ 提及选择。 */
+  listAgentSkills(): Promise<Array<{ name: string; description: string }>>;
+  /** 启动意图：由主进程通过 additionalArguments 传入（新窗口打开/新建/导入）。 */
+  startupIntent: ProjectOpenIntent | "";
+  /** 最近打开的项目（.magent）列表。 */
+  listRecentProjects(): Promise<RecentProject[]>;
+  /** 直接打开指定路径的 .magent 工程。 */
+  openProjectAt(path: string): Promise<OpenMidiResult>;
+  /** 保存工程到已授权路径（不经对话框）。 */
+  saveProjectTo(payload: RendererProjectPayload, path: string): Promise<SaveResult>;
+  /** 在目标意图下新建一个窗口。 */
+  createProjectWindow(intent: ProjectOpenIntent): Promise<void>;
+  /** 订阅 macOS 原生菜单「最近打开项目」点击（携带路径）；返回取消订阅函数。 */
+  onMenuOpenRecent(callback: (path: string) => void): () => void;
   listSubscriptions(): Promise<SubscriptionSummary[]>;
   createSubscription(input: SubscriptionInput): Promise<SubscriptionSummary>;
   updateSubscription(id: string, input: SubscriptionInput): Promise<SubscriptionSummary>;
@@ -192,6 +231,8 @@ export interface MagentBridge {
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
   listInstruments(): Promise<InstrumentLibrarySummary[]>;
+  /** 下载推荐音源（GeneralUser GS）到系统音源库目录；已存在则跳过下载。 */
+  downloadRecommendedInstrument(): Promise<{ ok: boolean; path?: string; downloaded: boolean; error?: string }>;
   /** 弹出原生多选对话框，返回选中音源文件路径。 */
   pickInstrumentFiles(): Promise<string[]>;
   /** 解析单个音源文件为项目级快照（校验扩展名与大小，不写入任何库）。 */

@@ -21,7 +21,12 @@
 任何模式下你都不能：应用修改、导出文件、写盘、执行 Shell。
 工具调用会被权限层拦截；不要尝试绕过。
 
-音源（instrument）是只读元数据：你不能修改、删除或生成任何音源相关内容，也不应臆造轨道上的音色引用。
+音源（instrument）：用 instrument_search 在系统音源库与工程绑定音源中查找音色，
+用 set_track_instrument 提出轨道音色更换候选；不得编造音色引用，libraryId/bank/program
+必须来自 instrument_search 结果。
+
+Skill 作用域运行会提供 list_skills / load_skill / invoke_skill 工具：子 Skill 继承当前模式权限，
+只做分析或候选、不能写工程；嵌套深度与调用次数受运行时限制，具体规则见当次 Skill 说明。
 
 ## 3. 工程数据格式（.magent）
 
@@ -70,7 +75,7 @@
 - `channel`：0–15；鼓组通常为 9。`program`：0–127 General MIDI 音色。
 - `loopRegion` 为 `null` 表示未设置循环。
 - `revisions` 记录工程修订历史；`agentSessions` 记录历史 Agent 会话。
-- 轨道可选 `volume`（0–1）与 `instrument`（音色引用，只读，Agent 不能修改）。
+- 轨道可选 `volume`（0–1）与 `instrument`（音色引用，可用 instrument_search / set_track_instrument 提出更换）。
 - `instruments`：项目级音源清单（绝对路径 + 元数据），只读，**不会注入到对话上下文**，
   不应引用其中的任何路径。
 
@@ -102,7 +107,7 @@
 | `update_notes` | 修改音符 | `trackId`、`changes[]`（noteId + 可改字段） |
 | `create_track` | 新建轨道 | `track`（name/role/channel/program/muted/solo/notes） |
 | `delete_track` | 删除轨道 | `trackId` |
-| `update_track` | 修改轨道 | `trackId`、`changes`（name/role/channel/program/muted/solo） |
+| `update_track` | 修改轨道 | `trackId`、`changes`（name/role/channel/program/muted/solo/instrument；instrument 可为音色引用或 null 清除） |
 | `set_tempo` | 设置速度 | `tick`、`bpm`（20–400） |
 | `set_time_signature` | 设置拍号 | `tick`、`numerator`（1–32）、`denominator`（1/2/4/8/16/32） |
 | `set_loop` | 设置循环区 | `startTick`、`endTick` |

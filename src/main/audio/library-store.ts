@@ -1,5 +1,6 @@
 import { app } from "electron";
 import Store from "electron-store";
+import { createWriteStream } from "node:fs";
 import { cp, mkdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -35,6 +36,61 @@ interface LibraryStoreSchema {
 }
 
 const MAX_SCANNED_ENTRIES = 256;
+
+/** 推荐音源（GeneralUser GS，GM/GS 兼容，约 32MB）。 */
+const RECOMMENDED_SF2_URL = "https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/main/GeneralUser-GS.sf2";
+const RECOMMENDED_SF2_FILE = "GeneralUser-GS.sf2";
+
+/**
+ * 下载推荐音源到系统音源库目录（若已存在则跳过下载）。
+ * 仅下载音源文件本体，不解析；文件落入目录后由下次扫描自动登记。
+ */
+export async function downloadRecommendedSoundfont(): Promise<{
+  ok: boolean;
+  path?: string;
+  downloaded: boolean;
+  error?: string;
+}> {
+  const dir = await ensureSystemInstrumentDirectory();
+  const filePath = join(dir, RECOMMENDED_SF2_FILE);
+  try {
+    await stat(filePath);
+    return { ok: true, path: filePath, downloaded: false };
+  } catch {
+    // 不存在则下载。
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error("下载超时，请检查网络。")), 10 * 60_000);
+  try {
+    const response = await fetch(RECOMMENDED_SF2_URL, { signal: controller.signal });
+    if (!response.ok) throw new Error(`下载失败：HTTP ${response.status} ${response.statusText}`);
+    if (!response.body) throw new Error("下载失败：响应无内容。");
+    // 流式写入，避免大文件全部驻留内存。
+    const output = createWriteStream(filePath);
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && !output.write(value)) {
+        await new Promise<void>((resolve) => output.once("drain", resolve));
+      }
+    }
+    await new Promise<void>((resolve, reject) => {
+      output.end((error?: Error | null) => (error ? reject(error) : resolve()));
+    });
+    const info = await stat(filePath);
+    if (info.size < 1_024) {
+      await rm(filePath, { force: true });
+      throw new Error("下载内容异常（文件过小）。");
+    }
+    return { ok: true, path: filePath, downloaded: true };
+  } catch (error) {
+    await rm(filePath, { force: true });
+    return { ok: false, downloaded: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 let store: Store<LibraryStoreSchema> | undefined;
 

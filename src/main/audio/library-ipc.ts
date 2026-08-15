@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import type { ProjectInstrumentSnapshot } from "../../shared/instrument.js";
 import {
   bindInstrumentToProject,
+  downloadRecommendedSoundfont,
   ensureSystemInstrumentDirectory,
   getSystemInstrumentPath,
   listSystemInstruments,
@@ -15,6 +16,8 @@ const INSTRUMENT_FILTERS = [{ name: "音源文件", extensions: ["sf2", "sf3", "
 
 export function registerInstrumentLibraryIpc(): void {
   ipcMain.handle("instrument-library:list", () => listSystemInstruments());
+
+  ipcMain.handle("instrument-library:download-recommended", () => downloadRecommendedSoundfont());
 
   ipcMain.handle("instrument-library:pick-files", async (event): Promise<string[]> => {
     const owner = BrowserWindow.fromWebContents(event.sender) ?? undefined;

@@ -60,6 +60,12 @@
       "buildResources": "build",
       "output": "release"
     },
+    "extraResources": [
+      {
+        "from": "skills",
+        "to": "skills"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "icon.ico",

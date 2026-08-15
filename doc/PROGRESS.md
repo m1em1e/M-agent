@@ -29,6 +29,9 @@
 - 启动时若音源库为空，顶部显示黄色可关闭警告，引导进入「设置 → 音源」配置；可与环境红色警告同时出现。
 - macOS 无应用菜单场景下补回 Cmd/Ctrl+C/V/X/A 剪贴板快捷键（主进程 `before-input-event` 分发）。
 - macOS 标题栏优化：去掉左上角 logo 与应用内菜单栏，标题栏保留给系统红绿灯按钮并居中（`--titlebar-h: 40px`）；「文件/编辑/视图/窗口/音源/插件/帮助」菜单移到 macOS 原生 Menu Bar，点击经 `menu:action` IPC 转发到渲染进程执行；Cmd+Z/Y 由原生菜单处理避免重复触发，剪贴板由菜单编辑角色处理。Windows/Linux 仍使用应用内菜单栏与 logo。
+- 菜单项已解耦为单一数据源 `src/shared/menu.ts`（`APP_MENU_GROUPS`）：macOS 原生菜单与 Windows/Linux 应用内菜单都从它生成，改菜单只需改一处（角色/分隔线仅原生菜单渲染，应用内菜单自动忽略）。
+- 「文件」菜单重构：新建项目 / 打开项目 / 最近打开项目（子菜单，主进程 electron-store 持久化最近 8 个 .magent，macOS 原生与 in-app 同步）/ 保存项目（有当前路径免对话框直写，路径需经对话框/打开确认）/ 项目另存为 / 导入（子菜单：.magent 工程 / MIDI 文件）/ 导出 MIDI / 关闭项目；应用内菜单支持 hover 次级菜单。
+- 新建 / 打开项目 / 导入 MIDI 会先询问「当前窗口 or 新窗口」：新窗口经 `window:create-project` 创建，`--magent-intent` 经 `additionalArguments` 传给新窗口自动执行对应操作。
 
 ### Pi Agent
 
@@ -43,6 +46,25 @@
 - 候选经过 Schema 和 MIDI 领域校验后才返回界面。
 - 候选最多三个，重复候选 ID 会被拒绝。
 - 没有 API Key 时使用 Pi faux Provider 完成离线演示。
+- **Skill 嵌套调用（2026-08-15）**：`@skill-name` 触发顶层 Skill；`list_skills`/`load_skill`/
+  `invoke_skill` 仅在 Skill 作用域注册；子 Skill 继承父模式递归运行，深度 ≤2、每父 ≤4、全局 ≤8，
+  禁止 self/环；子结果按 `SkillInvocationResult` 返回，顶层经确定性合并引擎（`mergeSkillOperations`，
+  先到先得、绝不 last-wins）合成统一候选，走现有 Diff Preview 与用户确认。7 份 SKILL.md
+  位于仓库根 `skills/`（打包进 `resources/skills`），支持用户自定义；`skillTrace` 可观测。
+- **Agent 音色切换（2026-08-15）**：新增 `instrument_search`（系统音源库 + 工程绑定音源检索，
+  返回 SoundFont bank/program）与 `set_track_instrument`（提出 `update_track` 音色更换候选，
+  `instrument` 引用或 null 清除）；research 只能搜索，plan/goal 可提出候选；`update_track.changes`
+  支持 `instrument`，界面候选已可应用 `update_track`（含音色）。
+- **播放与工程体验（2026-08-15）**：新建项目为完全空工程（0 轨道）；SoundFont 音符按 `durationMs`
+  定时 `noteOff` 释放、暂停/停止/开新工程时 `stopAll()`（同时停 SFZ），杜绝延音残留；播放音符时长上限
+  300→8000ms；轨道检查器新增「删除轨道」（可撤销）；`agent:run` 超时统一 300s 且中止带清晰原因
+  （「Agent 请求超时，已中止。」），瞬时流/网络错误仍自动重试一次。
+- **Agent 编排与取消（2026-08-16）**：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增
+  `agent:cancel` IPC 与 Agent 面板「取消」按钮（忙碌时替换发送按钮）；中止/超时诊断附带工具调用计数
+  （inspect/analyze/invoke_skill/propose 各几次 + 最近序列）；子 Skill 调用超时 45s→300s（避免误杀慢供应商的正常子调用）。
+- **候选可应用全部操作（2026-08-16）**：界面候选现可应用 MIDI 核心定义的全部 10 种操作（音符/轨道/
+  速度/拍号/循环）；撤销/重做栈从「轨道快照」升级为「完整编辑快照」（轨道 + tempo + 拍号 + 循环区），
+  一次 Ctrl+Z 可整单撤销含工程级操作的候选。
 
 ### 候选应用
 
@@ -155,11 +177,11 @@
 
 ```text
 npm test
-26 个测试文件通过
-133 项测试通过
+31 个测试文件通过
+168 项测试通过
 ```
 
-覆盖范围包括 MIDI 工程、SMF 导入导出、Agent 权限、Schema、GoalRunner、Pi kernel、main service、启动环境诊断、工程载荷边界、SFZ 解析/区域选择、音源类型推断、项目级音源快照、系统级目录扫描和 Markdown 渲染。
+覆盖范围包括 MIDI 工程、SMF 导入导出、Agent 权限、Schema、GoalRunner、Pi kernel、main service、启动环境诊断、工程载荷边界、SFZ 解析/区域选择、音源类型推断、项目级音源快照、系统级目录扫描、Markdown 渲染，以及 Skill 解析/加载/合并/嵌套调用守卫/真实递归内核集成与 Agent 音色切换（instrument_search / set_track_instrument / update_track 领域应用）。
 
 ### 完整构建
 

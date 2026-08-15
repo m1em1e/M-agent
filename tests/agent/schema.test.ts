@@ -20,6 +20,28 @@ describe("proposed change-set schema", () => {
     expect(() => parseProposedChangeSet(input)).toThrow(ChangeSetSchemaError);
   });
 
+  it("accepts update_track instrument change and null clear", () => {
+    const set = validRawChangeSet();
+    set.operations = [{
+      type: "update_track",
+      trackId: "track-1",
+      changes: { instrument: { type: "soundfont", libraryId: "lib-1", bank: 0, program: 12 } },
+    }];
+    expect(parseProposedChangeSet(set)).toMatchObject({ operations: [expect.objectContaining({ type: "update_track" })] });
+    set.operations = [{ type: "update_track", trackId: "track-1", changes: { instrument: null } }];
+    expect(parseProposedChangeSet(set)).toBeTruthy();
+  });
+
+  it("rejects an invalid instrument reference", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "update_track",
+      trackId: "track-1",
+      changes: { instrument: { type: "soundfont", libraryId: 5, bank: 0, program: 12 } },
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(ChangeSetSchemaError);
+  });
+
   it("rejects invalid note bounds without partial acceptance", () => {
     const input = validRawChangeSet();
     input.operations = [

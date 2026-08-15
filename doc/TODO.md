@@ -8,6 +8,12 @@
 > 已关闭（2026-08-15）：P0-1 大型工程分析栈溢出已修复（`pi-kernel.ts` 的 `pitchRange` 改单次循环 +
 > 130,000 音符回归测试）；P0-2 Electron 已升级到 43.4.0（内置 Node 24.18.1，`npm audit` 0 漏洞，
 > typecheck / 134 测试 / build / Electron smoke 全部通过）。原 P0-3 Windows 安装器验证移至 P2「发布与打包」。
+> 已实现：Skill 嵌套调用（`@skill` 触发、list/load/invoke_skill、深度/环/预算守卫、权限继承、
+> 确定性合并、`skillTrace`），7 份 SKILL.md 在仓库根 `skills/`，见 [SKILLS.md](SKILLS.md)。
+> 已实现：Agent 音色切换（`instrument_search` + `set_track_instrument`，`update_track` 支持音色，界面可应用）。
+
+> 待办（高优先级）：新建项目体验修复（隐藏无轨道检查器 / 时长随最长轨道 / 默认欢迎语），
+> 见 [TODO_NEW_PROJECT_FIXES.md](TODO_NEW_PROJECT_FIXES.md)；WAV/OGG 音频导出计划见 [AUDIO_EXPORT.md](AUDIO_EXPORT.md)。
 
 ## P1：主要功能与正确性缺口
 
@@ -97,5 +103,5 @@ ChatGPT Plus/Pro OAuth 已接入并能检测已有 Pi 登录，但未发起真�
 - 真实 OpenAI 云端链路已通过端到端测试。
 - 大型 MIDI 工程已稳定支持。
 - 目标模式已有完整成本预算和音乐评分系统。
-- Renderer 已能应用 MIDI 核心定义的所有操作类型。
 - 两级音源库（扫描 / 绑定 / 路径迁移 / 换机失效）已在三平台真实桌面交互中完整验证（目前仅 macOS 冒烟通过）。
+- Skill 嵌套调用已在真实云端模型上端到端验证（目前仅离线脚本化 tool loop 与单测覆盖）。

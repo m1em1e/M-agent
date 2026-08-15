@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { exportMidi, importMidi } from "../core/midi/index.js";
 import type { RendererProjectPayload } from "../shared/bridge.js";
+import type { MidiProject } from "../shared/midi.js";
 import { assertProjectFile, rendererPayloadToProject } from "./project-adapter.js";
 import { clearApiKey, getApiKey, hasApiKey } from "./secure-settings.js";
 import { runAgent } from "./agent-service.js";
@@ -22,6 +23,13 @@ import { checkAndSaveConfiguredShell, getConfiguredShellSettings } from "./shell
 import { registerSubscriptionIpc } from "./subscription-ipc.js";
 import { registerUsageIpc } from "./usage-ipc.js";
 import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
+import { loadAvailableSkills } from "./skill-loader.js";
+import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
+import { APP_MENU_GROUPS, type AppMenuItem } from "../shared/menu.js";
+import type { ProjectOpenIntent } from "../shared/bridge.js";
+
+/** 用户在本会话中经对话框/打开确认过的可写工程路径（供「保存项目」免对话框直写）。 */
+const approvedSavePaths = new Set<string>();
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -35,6 +43,7 @@ if (process.platform === "win32") {
 }
 
 // 在 whenReady 中按平台安装菜单：macOS 使用原生 Menu Bar，其余平台不显示应用菜单。
+// 菜单项来自共享数据源 APP_MENU_GROUPS，与 Windows/Linux 应用内菜单保持同步。
 function installApplicationMenu(): void {
   if (process.platform !== "darwin") {
     Menu.setApplicationMenu(null);
@@ -43,10 +52,29 @@ function installApplicationMenu(): void {
   const sendAction = (action: string) => {
     BrowserWindow.getFocusedWindow()?.webContents.send("menu:action", action);
   };
-  const item = (label: string, action: string, accelerator?: string): Electron.MenuItemConstructorOptions => ({
-    label,
-    ...(accelerator ? { accelerator } : {}),
-    click: () => sendAction(action),
+  const buildItems = (items: AppMenuItem[]): Electron.MenuItemConstructorOptions[] => items.map((item) => {
+    if (item.separator) return { type: "separator" };
+    if (item.role) return { role: item.role, label: item.label };
+    if (item.recentProjects) {
+      const recent = listRecentProjects();
+      return {
+        label: item.label,
+        submenu: recent.length > 0
+          ? recent.map((entry) => ({
+              label: entry.title || entry.path.split(/[\\/]/).pop() || entry.path,
+              click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu:open-recent", entry.path),
+            }))
+          : [{ label: "暂无最近项目", enabled: false }],
+      };
+    }
+    if (item.submenu) {
+      return { label: item.label, submenu: buildItems(item.submenu) };
+    }
+    return {
+      label: item.label,
+      ...(item.accelerator ? { accelerator: item.accelerator } : {}),
+      click: () => item.action && sendAction(item.action),
+    };
   });
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     {
@@ -61,66 +89,14 @@ function installApplicationMenu(): void {
         { role: "quit", label: "退出 M Agent" },
       ],
     },
-    {
-      label: "文件",
-      submenu: [
-        item("导入 MIDI", "file-open-midi", "CmdOrCtrl+O"),
-        item("打开工程", "file-open-project", "CmdOrCtrl+Shift+O"),
-        item("保存工程", "file-save-project", "CmdOrCtrl+S"),
-        item("导出 MIDI", "file-export-midi", "CmdOrCtrl+Shift+S"),
-        { type: "separator" },
-        item("关闭窗口", "window-close", "CmdOrCtrl+W"),
-      ],
-    },
-    {
-      label: "编辑",
-      submenu: [
-        item("撤销", "edit-undo", "CmdOrCtrl+Z"),
-        item("重做", "edit-redo", "CmdOrCtrl+Shift+Z"),
-        { type: "separator" },
-        { role: "cut", label: "剪切" },
-        { role: "copy", label: "拷贝" },
-        { role: "paste", label: "粘贴" },
-        { role: "selectAll", label: "全选" },
-      ],
-    },
-    {
-      label: "视图",
-      submenu: [
-        item("重新检测运行环境", "view-check-environment"),
-        item("设置", "view-settings", "CmdOrCtrl+,"),
-        { type: "separator" },
-        { role: "togglefullscreen", label: "切换全屏" },
-      ],
-    },
-    {
-      label: "窗口",
-      submenu: [
-        { role: "minimize", label: "最小化" },
-        { role: "zoom", label: "缩放" },
-        { type: "separator" },
-        { role: "front", label: "前置全部窗口" },
-      ],
-    },
-    {
-      label: "音源",
-      submenu: [item("音源库管理", "instruments-settings")],
-    },
-    {
-      label: "插件",
-      submenu: [item("插件管理", "plugins-settings")],
-    },
-    {
-      label: "帮助",
-      submenu: [
-        item("关于 M Agent", "help-about"),
-        item("设置", "help-settings"),
-      ],
-    },
+    ...APP_MENU_GROUPS.map((group) => ({
+      label: group.label,
+      submenu: buildItems(group.items),
+    })),
   ]));
 }
 
-function createWindow(): void {
+function createWindow(openIntent?: ProjectOpenIntent): void {
   const productionUrl = pathToFileURL(join(currentDir, "../../dist/index.html")).toString();
   const developmentIconRoot = join(currentDir, "../../build");
   const windowIcon = process.platform === "win32"
@@ -146,6 +122,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      ...(openIntent ? { additionalArguments: [`--magent-intent=${openIntent}`] } : {}),
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -185,19 +162,39 @@ ipcMain.handle("midi:export", async (_event, payload: RendererProjectPayload) =>
 ipcMain.handle("project:open", async () => {
   const selected = await dialog.showOpenDialog({ properties: ["openFile"], filters: [{ name: "M Agent Project", extensions: ["magent"] }] });
   if (selected.canceled || !selected.filePaths[0]) return { canceled: true };
-  const filePath = selected.filePaths[0];
-  await assertFileSize(filePath, MAX_PROJECT_FILE_BYTES, "工程文件");
-  const project: unknown = JSON.parse(await readFile(filePath, "utf8"));
-  assertProjectFile(project);
-  return { canceled: false, filePath, project };
+  return openProjectFile(selected.filePaths[0]);
+});
+
+ipcMain.handle("project:open-path", async (_event, path: unknown) => {
+  if (typeof path !== "string" || !path.trim()) throw new Error("工程文件路径无效。");
+  return openProjectFile(path.trim());
 });
 
 ipcMain.handle("project:save", async (_event, payload: RendererProjectPayload) => {
   const project = rendererPayloadToProject(payload);
   const selected = await dialog.showSaveDialog({ defaultPath: `${project.title}.magent`, filters: [{ name: "M Agent Project", extensions: ["magent"] }] });
   if (selected.canceled || !selected.filePath) return { canceled: true };
-  await writeFile(selected.filePath, `${JSON.stringify(project, null, 2)}\n`, "utf8");
+  await saveProjectToFile(project, selected.filePath);
   return { canceled: false, filePath: selected.filePath };
+});
+
+ipcMain.handle("project:save-to", async (_event, payload: RendererProjectPayload, path: unknown) => {
+  if (typeof path !== "string" || !path.trim()) throw new Error("工程文件路径无效。");
+  const cleanPath = path.trim();
+  if (!cleanPath.toLowerCase().endsWith(".magent")) throw new Error("仅支持保存为 .magent 工程文件。");
+  if (!approvedSavePaths.has(cleanPath)) throw new Error("该路径未经用户确认，拒绝直接保存。");
+  const project = rendererPayloadToProject(payload);
+  await saveProjectToFile(project, cleanPath);
+  return { canceled: false, filePath: cleanPath };
+});
+
+ipcMain.handle("projects:list-recent", () => listRecentProjects());
+
+ipcMain.handle("window:create-project", (_event, intent: unknown) => {
+  if (intent !== "new-project" && intent !== "open-project" && intent !== "import-midi") {
+    throw new Error("窗口意图无效。");
+  }
+  createWindow(intent);
 });
 
 ipcMain.handle("shell:get-settings", () => getConfiguredShellSettings());
@@ -278,17 +275,26 @@ ipcMain.handle("agent:run", async (event, payload: unknown) => {
   const senderId = event.sender.id;
   if (activeAgentRuns.has(senderId)) throw new Error("当前窗口已有 Agent 任务正在运行。");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
+  // 不设固定墙钟超时：长任务（Skill 嵌套编排）由用户按「取消」控制；
+  // 成本由 token/轮次预算兜底，挂死由 agent:cancel 兜底。
   const abortOnDestroyed = () => controller.abort();
   activeAgentRuns.set(senderId, controller);
   event.sender.once("destroyed", abortOnDestroyed);
   try {
-    return await runAgent(payload, await resolveAgentAuthentication(controller.signal), controller.signal);
+    return await runAgent(
+      payload,
+      await resolveAgentAuthentication(controller.signal),
+      controller.signal,
+      (update) => { if (!event.sender.isDestroyed()) event.sender.send("agent:live", update); },
+    );
   } finally {
-    clearTimeout(timeout);
     event.sender.removeListener("destroyed", abortOnDestroyed);
     activeAgentRuns.delete(senderId);
   }
+});
+
+ipcMain.handle("agent:cancel", (event) => {
+  activeAgentRuns.get(event.sender.id)?.abort(new Error("Agent 已取消。工程未发生修改。"));
 });
 
 ipcMain.handle("window:minimize", (event) => {
@@ -302,6 +308,11 @@ ipcMain.handle("window:toggle-maximize", (event) => {
 });
 ipcMain.handle("window:close", (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+ipcMain.handle("agent:list-skills", async () => {
+  const skills = await loadAvailableSkills();
+  return skills.map((skill) => ({ name: skill.name, description: skill.description }));
 });
 
 registerSubscriptionIpc();
@@ -334,6 +345,27 @@ async function assertFileSize(filePath: string, maximumBytes: number, label: str
   const info = await stat(filePath);
   if (!info.isFile()) throw new Error(`${label}路径不是普通文件。`);
   if (info.size > maximumBytes) throw new Error(`${label}超过允许的大小上限。`);
+}
+
+async function openProjectFile(filePath: string): Promise<{ canceled: false; filePath: string; project: MidiProject }> {
+  await assertFileSize(filePath, MAX_PROJECT_FILE_BYTES, "工程文件");
+  const project: unknown = JSON.parse(await readFile(filePath, "utf8"));
+  assertProjectFile(project);
+  recordRecentProject(filePath, project.title);
+  approvedSavePaths.add(filePath);
+  refreshNativeMenu();
+  return { canceled: false, filePath, project };
+}
+
+async function saveProjectToFile(project: MidiProject, filePath: string): Promise<void> {
+  await writeFile(filePath, `${JSON.stringify(project, null, 2)}\n`, "utf8");
+  recordRecentProject(filePath, project.title);
+  approvedSavePaths.add(filePath);
+  refreshNativeMenu();
+}
+
+function refreshNativeMenu(): void {
+  if (process.platform === "darwin") installApplicationMenu();
 }
 
 /**

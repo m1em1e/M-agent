@@ -558,6 +558,23 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .menu-item:disabled { color: var(--dim); cursor: default; }
 .menu-item kbd { color: var(--dim); font: 9px var(--mono); }
 
+.menu-submenu-item { position: relative; }
+.menu-submenu-caret { color: var(--dim); font-size: 9px; }
+.menu-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 4px);
+  z-index: 45;
+  display: none;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--surface-modal);
+  box-shadow: 0 14px 40px var(--shadow);
+}
+.menu-submenu-item:hover > .menu-submenu { display: block; }
+
 .quiet-button, .icon-button, .transport-circle, .tool-switch button {
   border: 0;
   background: transparent;
@@ -582,7 +599,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .transport-main { gap: 6px; }
 .transport-circle { width: 33px; height: 33px; border-radius: 50%; display: grid; place-items: center; background: #e8e9df; color: #17191a; box-shadow: 0 1px 0 rgba(255,255,255,.2); }
 .transport-circle:hover { background: white; transform: translateY(-1px); }
-.position-readout { min-width: 65px; color: #d8d9d0; font: 500 12px "JetBrains Mono", monospace; letter-spacing: .04em; }
+.position-readout { min-width: 150px; color: #d8d9d0; font: 500 12px "JetBrains Mono", monospace; letter-spacing: .04em; }
 .transport-field { height: 33px; min-width: 57px; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 7px; padding: 0 9px; border-left: 1px solid var(--line); }
 .transport-field span, .compact-select span { color: #606664; font: 600 8px "JetBrains Mono", monospace; letter-spacing: .09em; text-transform: uppercase; }
 .transport-field strong { font: 500 11px "JetBrains Mono", monospace; color: #c9cbc4; }
@@ -715,6 +732,8 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .track-inspector input, .track-inspector select { width: 100%; min-width: 0; border: 1px solid #2b3031; border-radius: 4px; background: #181c1d; color: #c7cac2; padding: 6px 7px; font-size: 10px; }
 .track-inspector input[type="range"] { padding: 0; height: 2px; accent-color: var(--accent); }
 .inspector-hint { margin: 15px 0 0; color: #4f5552; font-size: 9px; line-height: 1.55; }
+.inspector-track-actions { margin-top: 12px; }
+.inspector-track-actions .danger-text { margin-top: 0; }
 .note-inspector { margin: 14px -2px 0; padding: 13px 2px 0; border-top: 1px solid var(--line); }
 .note-data { margin-top: 10px; display: flex; justify-content: space-between; align-items: baseline; }
 .note-data strong { color: #e4e5dd; font: 500 18px "JetBrains Mono", monospace; }
@@ -793,6 +812,21 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .thinking-process p { margin: 7px 0 0; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.55; white-space: pre-wrap; }
 .thinking { margin: 8px 0 15px 36px; display: flex; align-items: center; gap: 4px; color: #626865; font-size: 8px; }
 .thinking span { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; }
+.agent-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 10px 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-input) 70%, transparent);
+  color: var(--muted);
+  font: 9px "JetBrains Mono", monospace;
+}
+.agent-live-tool { display: inline-flex; align-items: center; gap: 5px; color: var(--text); }
+.agent-live-tool i { width: 5px; height: 5px; border-radius: 50%; background: var(--lime); animation: pulse 0.8s infinite alternate; }
 .thinking span:nth-child(2) { animation-delay: .2s; }
 .thinking span:nth-child(3) { animation-delay: .4s; margin-right: 4px; }
 @keyframes pulse { to { opacity: .2; transform: translateY(-2px); } }
@@ -865,9 +899,47 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .prompt-area textarea { width: 100%; height: 56px; resize: none; border: 0; padding: 5px 34px 2px 3px; background: transparent; color: #c8cbc3; font-size: 10px; line-height: 1.45; }
 .prompt-area textarea::placeholder { color: #505653; }
 .prompt-area textarea:focus { outline: 0; }
+.prompt-input-wrap { position: relative; }
+.skill-mention-menu {
+  position: absolute;
+  /* 锚定整个输入区（.prompt-area）：浮在输入框上方且不与之重叠 */
+  bottom: calc(100% + 10px);
+  left: 7px;
+  right: 7px;
+  z-index: 45;
+  display: grid;
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface-modal);
+  box-shadow: 0 -12px 30px var(--shadow);
+}
+.skill-mention-menu::-webkit-scrollbar { display: none; }
+.skill-mention-menu button {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.skill-mention-menu button:hover,
+.skill-mention-menu button.active { background: var(--surface-hover); }
+.skill-mention-menu button strong { overflow: hidden; color: var(--accent); font-size: 10px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.skill-mention-menu button span { overflow: hidden; color: var(--muted); font-size: 9px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.skill-mention-empty { padding: 8px; color: var(--dim); font-size: 9px; }
 .send-button { position: absolute; right: 8px; bottom: 8px; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 5px; background: var(--accent); color: #1e1716; cursor: pointer; }
 .send-button:hover { filter: brightness(1.08); }
 .send-button:disabled { background: #2c3030; color: #555a58; cursor: default; }
+.send-button.cancel-button { background: #8a3a34; color: #ffe3de; }
+.send-button.cancel-button:hover { background: #a0473f; }
 
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; background: rgba(4,5,5,.72); backdrop-filter: blur(7px); animation: appear .16s ease; }
 @keyframes appear { from { opacity: 0; } }

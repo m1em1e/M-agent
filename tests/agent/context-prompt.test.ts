@@ -43,8 +43,9 @@ describe("agent context prompt", () => {
     expect(AGENT_CONTEXT_PROMPT).toMatch(/禁止编造/);
   });
 
-  it("marks instruments as read-only and not injected into the conversation", () => {
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/音源（instrument）是只读元数据/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/不会注入到对话上下文/);
+  it("documents instrument search and set-instrument capability", () => {
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/instrument_search/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/set_track_instrument/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/不得编造音色引用/);
   });
 });

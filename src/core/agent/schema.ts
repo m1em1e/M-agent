@@ -51,6 +51,20 @@ function integerInRange(value: unknown, min: number, max: number): boolean {
   return Number.isInteger(value) && Number(value) >= min && Number(value) <= max;
 }
 
+/** 校验音色引用的结构（soundfont 需 libraryId/bank/program；sfz 需 libraryId）。 */
+function isInstrumentReferenceLike(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === "soundfont") {
+    return typeof value.libraryId === "string" && value.libraryId.length > 0
+      && integerInRange(value.bank, 0, 16_383)
+      && integerInRange(value.program, 0, 127);
+  }
+  if (value.type === "sfz") {
+    return typeof value.libraryId === "string" && value.libraryId.length > 0;
+  }
+  return false;
+}
+
 function validateNote(
   value: unknown,
   path: string,
@@ -194,7 +208,7 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
         break;
       }
       const changes = value.changes;
-      const allowed = ["name", "role", "channel", "program", "muted", "solo"];
+      const allowed = ["name", "role", "channel", "program", "muted", "solo", "instrument"];
       if (!allowed.some((key) => changes[key] !== undefined)) {
         issues.push({ path: `${path}.changes`, message: "must update at least one track property" });
       }
@@ -215,6 +229,9 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
       }
       if (changes.solo !== undefined && typeof changes.solo !== "boolean") {
         issues.push({ path: `${path}.changes.solo`, message: "must be a boolean" });
+      }
+      if (changes.instrument !== undefined && changes.instrument !== null && !isInstrumentReferenceLike(changes.instrument)) {
+        issues.push({ path: `${path}.changes.instrument`, message: "must be a valid instrument reference or null" });
       }
       break;
     }

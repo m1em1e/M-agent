@@ -12,7 +12,10 @@ import {
 import type {
   MagentBridge,
   OpenMidiResult,
+  ProjectOpenIntent,
+  RecentProject,
   RendererProjectPayload,
+  SaveResult,
   StartupEnvironmentReport,
   UsagePage,
   UsageSummary,
@@ -21,6 +24,8 @@ import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent
 import type { ShellCheckResult } from "../shared/shell";
 import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument } from "../shared/instrument";
 import { buildProjectInstruments } from "../shared/instrument";
+import type { SkillTraceEntry } from "../core/agent/skills/types";
+import { APP_MENU_GROUPS, type AppMenuItem } from "../shared/menu";
 import { AudioEngine } from "./audio/audio-engine";
 import { MarkdownContent } from "./markdown";
 import {
@@ -77,87 +82,6 @@ const settingsSections: Array<{ id: SettingsSection; label: string; icon: string
   { id: "plugins", label: "插件", icon: "plugin" },
 ];
 
-interface MenuEntry {
-  label: string;
-  shortcut?: string;
-  action?: string;
-  disabled?: boolean;
-}
-
-interface MenuGroup {
-  key: string;
-  label: string;
-  accessKey: string;
-  items: MenuEntry[];
-}
-
-const menuGroups: MenuGroup[] = [
-  {
-    key: "file",
-    label: "文件",
-    accessKey: "F",
-    items: [
-      { label: "导入 MIDI", shortcut: "Ctrl+O", action: "file-open-midi" },
-      { label: "打开工程", shortcut: "Ctrl+Shift+O", action: "file-open-project" },
-      { label: "保存工程", shortcut: "Ctrl+S", action: "file-save-project" },
-      { label: "导出 MIDI", shortcut: "Ctrl+Shift+S", action: "file-export-midi" },
-      { label: "关闭窗口", shortcut: "Ctrl+W", action: "window-close" },
-    ],
-  },
-  {
-    key: "edit",
-    label: "编辑",
-    accessKey: "E",
-    items: [
-      { label: "撤销", shortcut: "Ctrl+Z", action: "edit-undo" },
-      { label: "重做", shortcut: "Ctrl+Y", action: "edit-redo" },
-    ],
-  },
-  {
-    key: "view",
-    label: "视图",
-    accessKey: "V",
-    items: [
-      { label: "重新检测运行环境", action: "view-check-environment" },
-      { label: "设置", action: "view-settings" },
-    ],
-  },
-  {
-    key: "window",
-    label: "窗口",
-    accessKey: "W",
-    items: [
-      { label: "最小化", action: "window-minimize" },
-      { label: "最大化 / 还原", action: "window-maximize" },
-    ],
-  },
-  {
-    key: "instruments",
-    label: "音源",
-    accessKey: "S",
-    items: [
-      { label: "音源库管理", action: "instruments-settings" },
-    ],
-  },
-  {
-    key: "plugins",
-    label: "插件",
-    accessKey: "P",
-    items: [
-      { label: "插件管理", action: "plugins-settings" },
-    ],
-  },
-  {
-    key: "help",
-    label: "帮助",
-    accessKey: "H",
-    items: [
-      { label: "关于 M Agent", action: "help-about" },
-      { label: "设置", action: "help-settings" },
-    ],
-  },
-];
-
 interface MidiNote {
   id: string;
   pitch: number;
@@ -200,6 +124,9 @@ interface ChatMessage {
   author: "agent" | "user";
   text: string;
   thinking?: string[];
+  /** 正在流式写入的思考片段（未完成的段，展开显示）。 */
+  streamingThinking?: string;
+  skillTrace?: SkillTraceEntry[];
 }
 
 interface DragState {
@@ -227,11 +154,38 @@ interface ProjectMetadata {
   agentSessions: AgentSession[];
 }
 
+/** 撤销/重做栈里的完整编辑快照（轨道 + 速度/拍号/循环区）。 */
+interface EditorSnapshot {
+  tracks: MidiTrack[];
+  tempo: number;
+  timeSigNumerator: number;
+  timeSigDenominator: number;
+  tempoMap: TempoEvent[];
+  timeSignatures: TimeSignatureEvent[];
+  loopRegion: TickRange | null;
+}
+
+/** 应用候选后需要回写编辑器的结果（仅包含发生变化的字段）。 */
+interface ApplyResult {
+  tracks: MidiTrack[];
+  tempo?: number;
+  timeSigNumerator?: number;
+  timeSigDenominator?: number;
+  tempoMap?: TempoEvent[];
+  timeSignatures?: TimeSignatureEvent[];
+  loopRegion?: TickRange | null;
+}
+
 const PPQ = 480;
 const BEATS_PER_BAR = 4;
 const BAR_COUNT = 16;
 const MIN_PITCH = 36;
 const MAX_PITCH = 96;
+
+const WELCOME_MESSAGE = `欢迎使用 M Agent——面向独立游戏开发者的桌面 MIDI 创作 Agent。
+
+可直接描述编曲想法（如"把这段改成 JRPG 战斗音乐"），我会分析工程并给出可预览、可撤销的修改方案；
+在输入框按 @ 打开 Skill 选择（例如 @song-arranger 一键编排）。点击 + 添加轨道，双击钢琴卷帘添加音符。`;
 const ROW_HEIGHT = 18;
 
 /** 拍号分母 → 合法分子集合（按乐理惯例） */
@@ -426,6 +380,11 @@ const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.ma
   notes: track.notes.map((note) => ({ ...note })),
 }));
 
+const APPLICABLE_OPERATION_TYPES = new Set([
+  "insert_notes", "update_notes", "delete_notes", "update_track",
+  "create_track", "delete_track", "set_tempo", "set_time_signature", "set_loop", "clear_loop",
+]);
+
 const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sourceMode: AgentMode): Candidate => {
   let notesAdded = 0;
   let notesChanged = 0;
@@ -435,7 +394,7 @@ const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sou
     if (operation.type === "insert_notes") notesAdded += operation.notes.length;
     else if (operation.type === "update_notes") notesChanged += operation.changes.length;
     else if (operation.type === "delete_notes") notesDeleted += operation.noteIds.length;
-    else supported = false;
+    else if (!APPLICABLE_OPERATION_TYPES.has(operation.type)) supported = false;
   });
   const validationFailed = changeSet.validation?.some((result) => !result.valid) ?? false;
   return {
@@ -502,50 +461,143 @@ const validateNote = (note: MidiNote) =>
   && Number.isInteger(note.durationTicks) && note.durationTicks > 0
   && Number.isInteger(note.velocity) && note.velocity >= 1 && note.velocity <= 127;
 
-function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet): MidiTrack[] {
-  const next = cloneTracks(current);
-  const knownIds = new Set(next.flatMap((track) => track.notes.map((note) => note.id)));
+function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet): ApplyResult {
+  const work = cloneTracks(current);
+  const result: ApplyResult = { tracks: work };
+  const knownIds = new Set(work.flatMap((track) => track.notes.map((note) => note.id)));
+
+  const findTrack = (trackId: string): MidiTrack => {
+    const track = work.find((item) => item.id === trackId);
+    if (!track) throw new Error(`候选引用了不存在的轨道 ${trackId}。`);
+    return track;
+  };
 
   for (const operation of changeSet.operations) {
-    if (operation.type !== "insert_notes" && operation.type !== "update_notes" && operation.type !== "delete_notes") {
-      throw new Error(`暂不支持 ${operation.type} 操作。`);
-    }
-    const track = next.find((item) => item.id === operation.trackId);
-    if (!track) throw new Error(`候选引用了不存在的轨道 ${operation.trackId}。`);
-
-    if (operation.type === "insert_notes") {
-      const inserted = operation.notes.map((input) => {
-        const id = input.id ?? uid("agent-note");
-        const note: MidiNote = { ...input, id };
-        if (knownIds.has(id)) throw new Error(`候选包含重复音符 ID ${id}。`);
-        if (!validateNote(note)) throw new Error("候选包含越界或无效的音符数据。");
-        knownIds.add(id);
-        return note;
-      });
-      track.notes.push(...inserted);
-      continue;
-    }
-
-    if (operation.type === "update_notes") {
-      for (const change of operation.changes) {
-        const noteIndex = track.notes.findIndex((note) => note.id === change.noteId);
-        if (noteIndex < 0) throw new Error(`候选引用了不存在的音符 ${change.noteId}。`);
-        const updated = { ...track.notes[noteIndex], ...change };
-        delete (updated as MidiNote & { noteId?: string }).noteId;
-        if (!validateNote(updated)) throw new Error("候选修改后产生了无效音符。");
-        track.notes[noteIndex] = updated;
+    switch (operation.type) {
+      case "insert_notes": {
+        const track = findTrack(operation.trackId);
+        const inserted = operation.notes.map((input) => {
+          const id = input.id ?? uid("agent-note");
+          const note: MidiNote = { ...input, id };
+          if (knownIds.has(id)) throw new Error(`候选包含重复音符 ID ${id}。`);
+          if (!validateNote(note)) throw new Error("候选包含越界或无效的音符数据。");
+          knownIds.add(id);
+          return note;
+        });
+        track.notes.push(...inserted);
+        break;
       }
-      continue;
+      case "update_notes": {
+        const track = findTrack(operation.trackId);
+        for (const change of operation.changes) {
+          const noteIndex = track.notes.findIndex((note) => note.id === change.noteId);
+          if (noteIndex < 0) throw new Error(`候选引用了不存在的音符 ${change.noteId}。`);
+          const updated = { ...track.notes[noteIndex], ...change };
+          delete (updated as MidiNote & { noteId?: string }).noteId;
+          if (!validateNote(updated)) throw new Error("候选修改后产生了无效音符。");
+          track.notes[noteIndex] = updated;
+        }
+        break;
+      }
+      case "delete_notes": {
+        const track = findTrack(operation.trackId);
+        const missing = operation.noteIds.find((noteId) => !track.notes.some((note) => note.id === noteId));
+        if (missing) throw new Error(`候选引用了不存在的音符 ${missing}。`);
+        const deleting = new Set(operation.noteIds);
+        track.notes = track.notes.filter((note) => !deleting.has(note.id));
+        operation.noteIds.forEach((noteId) => knownIds.delete(noteId));
+        break;
+      }
+      case "update_track": {
+        const track = findTrack(operation.trackId);
+        const changes = { ...operation.changes };
+        if (changes.instrument === null) {
+          delete changes.instrument;
+          track.instrument = undefined;
+        }
+        Object.assign(track, changes);
+        break;
+      }
+      case "create_track": {
+        const input = operation.track;
+        const id = input.id ?? uid("track");
+        if (work.some((track) => track.id === id)) throw new Error(`候选包含重复轨道 ID ${id}。`);
+        const usedChannels = new Set(work.map((track) => track.channel));
+        const channel = input.channel
+          ?? (input.role === "drums" ? 9 : Array.from({ length: 16 }, (_, index) => index).find((candidate) => candidate !== 9 && !usedChannels.has(candidate)) ?? 0);
+        work.push({
+          id,
+          name: input.name.trim() || "Track",
+          role: input.role ?? "other",
+          color: TRACK_COLORS[work.length % TRACK_COLORS.length],
+          channel,
+          program: input.program ?? 0,
+          muted: input.muted ?? false,
+          solo: input.solo ?? false,
+          volume: input.volume,
+          instrument: input.instrument,
+          notes: (input.notes ?? []).map((note) => ({
+            id: note.id ?? uid("agent-note"),
+            pitch: note.pitch,
+            startTick: note.startTick,
+            durationTicks: note.durationTicks,
+            velocity: note.velocity,
+          })),
+        });
+        break;
+      }
+      case "delete_track": {
+        findTrack(operation.trackId);
+        const kept = work.filter((track) => track.id !== operation.trackId);
+        work.splice(0, work.length, ...kept);
+        break;
+      }
+      case "set_tempo":
+        if (operation.tick === 0) {
+          result.tempo = operation.bpm;
+        } else {
+          result.tempoMap = upsertTempoEvent(result.tempoMap ?? [], operation.tick, operation.bpm);
+        }
+        break;
+      case "set_time_signature":
+        if (operation.tick === 0) {
+          result.timeSigNumerator = operation.numerator;
+          result.timeSigDenominator = operation.denominator;
+        } else {
+          result.timeSignatures = upsertTimeSignature(result.timeSignatures ?? [], operation);
+        }
+        break;
+      case "set_loop":
+        result.loopRegion = { startTick: operation.startTick, endTick: operation.endTick };
+        break;
+      case "clear_loop":
+        result.loopRegion = null;
+        break;
+      default:
+        throw new Error(`暂不支持 ${(operation as { type?: unknown }).type} 操作。`);
     }
-
-    const missing = operation.noteIds.find((noteId) => !track.notes.some((note) => note.id === noteId));
-    if (missing) throw new Error(`候选引用了不存在的音符 ${missing}。`);
-    const deleting = new Set(operation.noteIds);
-    track.notes = track.notes.filter((note) => !deleting.has(note.id));
-    operation.noteIds.forEach((noteId) => knownIds.delete(noteId));
   }
 
-  return next;
+  return result;
+}
+
+function upsertTempoEvent(map: TempoEvent[], tick: number, bpm: number): TempoEvent[] {
+  return [...map.filter((event) => event.tick !== tick), { tick, bpm }].sort((a, b) => a.tick - b.tick);
+}
+
+function upsertTimeSignature(
+  signatures: TimeSignatureEvent[],
+  sig: { tick: number; numerator: number; denominator: number },
+): TimeSignatureEvent[] {
+  return [...signatures.filter((event) => event.tick !== sig.tick), { ...sig }].sort((a, b) => a.tick - b.tick);
+}
+
+/** 按 tick 合并两批事件（后者覆盖前者），按 tick 升序。 */
+function mergeEventsByTick<T extends { tick: number }>(existing: T[], incoming: T[]): T[] {
+  const byTick = new Map<number, T>();
+  for (const event of existing) byTick.set(event.tick, event);
+  for (const event of incoming) byTick.set(event.tick, event);
+  return [...byTick.values()].sort((a, b) => a.tick - b.tick);
 }
 
 function subscriptionSourceLabel(source: SubscriptionSummary["source"]): string {
@@ -588,6 +640,56 @@ function Icon({ name, size = 16 }: { name: string; size?: number }) {
   );
 }
 
+/** 应用内菜单项列表（递归渲染子菜单；「最近打开项目」由运行时 recentProjects 填充）。 */
+function MenuItemList({
+  items,
+  recentProjects,
+  onAction,
+}: {
+  items: AppMenuItem[];
+  recentProjects: RecentProject[];
+  onAction: (action: string, payload?: string) => void;
+}) {
+  const resolved = items.flatMap((item) => {
+    if (!item.recentProjects) return [item];
+    if (recentProjects.length === 0) {
+      return [{ label: "暂无最近项目", disabled: true } as AppMenuItem];
+    }
+    return recentProjects.map((entry) => ({
+      label: entry.title || entry.path.split(/[\\/]/).pop() || entry.path,
+      action: "open-recent-project",
+      payload: entry.path,
+    } as AppMenuItem));
+  });
+  return (
+    <>
+      {resolved.map((item, index) => (
+        item.submenu && item.submenu.length > 0 ? (
+          <div key={`${item.label}-${index}`} className="menu-item menu-submenu-item" role="menuitem">
+            <span>{item.label}</span>
+            <span className="menu-submenu-caret">▸</span>
+            <div className="menu-submenu" role="menu">
+              <MenuItemList items={item.submenu} recentProjects={recentProjects} onAction={onAction} />
+            </div>
+          </div>
+        ) : (
+          <button
+            key={`${item.label}-${index}`}
+            type="button"
+            className="menu-item"
+            role="menuitem"
+            disabled={item.disabled}
+            onClick={() => item.action && onAction(item.action, item.payload)}
+          >
+            <span>{item.label}</span>
+            {item.shortcut && <kbd>{item.shortcut}</kbd>}
+          </button>
+        )
+      ))}
+    </>
+  );
+}
+
 interface AppProps {
   initialAppearance: AppearancePreferences;
   themePresets: readonly ThemePreset[];
@@ -598,6 +700,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   useEffect(() => { document.title = `${projectTitle} · M Agent`; }, [projectTitle]);
   const [projectPpq, setProjectPpq] = useState(PPQ);
   const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
+  const [projectFilePath, setProjectFilePath] = useState("");
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [windowChoice, setWindowChoice] = useState<ProjectOpenIntent | null>(null);
   const [tracks, setTracks] = useState<MidiTrack[]>(() => cloneTracks(initialTracks));
   const [selectedTrackId, setSelectedTrackId] = useState(initialTracks[0].id);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -611,15 +716,26 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [playhead, setPlayhead] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [mode, setMode] = useState<AgentMode>("goal");
-  const [past, setPast] = useState<MidiTrack[][]>([]);
-  const [future, setFuture] = useState<MidiTrack[][]>([]);
+  const [past, setPast] = useState<EditorSnapshot[]>([]);
+  const [future, setFuture] = useState<EditorSnapshot[]>([]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>(seedCandidates);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: "hello", author: "agent", text: "我读完了当前 4 条轨道。循环在第 8 小节尾部略显拥挤，可以先留出半拍，再让旋律回到 C5。" },
+    { id: "hello", author: "agent", text: WELCOME_MESSAGE },
   ]);
   const [prompt, setPrompt] = useState("");
   const [agentBusy, setAgentBusy] = useState(false);
+  const [agentLive, setAgentLive] = useState<{
+    turns: number;
+    currentTool: string | null;
+    toolCalls: Record<string, number>;
+    skills: Array<{ skill: string; status: string; depth: number; durationMs: number }>;
+  }>({ turns: 0, currentTool: null, toolCalls: {}, skills: [] });
+  const [agentSkills, setAgentSkills] = useState<Array<{ name: string; description: string }>>([]);
+  const [agentSkillsLoaded, setAgentSkillsLoaded] = useState(false);
+  const [skillMention, setSkillMention] = useState<{ open: boolean; query: string; caret: number; atIndex: number }>({ open: false, query: "", caret: 0, atIndex: 0 });
+  const [skillMentionIndex, setSkillMentionIndex] = useState(0);
+  const promptWrapRef = useRef<HTMLDivElement>(null);
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const menuBarRef = useRef<HTMLDivElement>(null);
   const timeSigRef = useRef<HTMLDivElement>(null);
@@ -637,6 +753,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [instrumentLibrary, setInstrumentLibrary] = useState<InstrumentLibrarySummary[]>([]);
   const [instrumentLibraryLoaded, setInstrumentLibraryLoaded] = useState(false);
   const [instrumentDropActive, setInstrumentDropActive] = useState(false);
+  const [recommendedDownloadBusy, setRecommendedDownloadBusy] = useState(false);
   const [instrumentWarningDismissed, setInstrumentWarningDismissed] = useState(() => {
     try { return localStorage.getItem("magent.instrument-warning-dismissed") === "1"; } catch { return false; }
   });
@@ -676,6 +793,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const startTickRef = useRef(0);
   const lastTickRef = useRef(0);
   const currentPlayheadRef = useRef(0);
+  // 实时思考流相关
+  const runMessageIdRef = useRef<string>("");
+  const liveThinkingRef = useRef("");
+  const liveThinkingUiTimerRef = useRef<number | null>(null);
+  const liveThinkingFlushTimerRef = useRef<number | null>(null);
 
   const beatWidth = 54 * zoom;
   const canvasWidth = KEY_WIDTH + BAR_COUNT * BEATS_PER_BAR * beatWidth;
@@ -693,6 +815,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setToast(message);
     window.setTimeout(() => setToast(null), 2400);
   }, []);
+
+  const filteredSkills = agentSkills.filter((skill) => {
+    const query = skillMention.query.toLowerCase();
+    return !query || skill.name.toLowerCase().includes(query) || skill.description.toLowerCase().includes(query);
+  });
 
   useLayoutEffect(() => {
     applyAppearancePreferences(appearance, themePresets);
@@ -889,12 +1016,58 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [environmentBusy, settingsOpen]);
 
+  // 每次渲染记录完整编辑状态，供提交/撤销/重做生成一致快照。
+  const editorStateRef = useRef<EditorSnapshot>({
+    tracks: [], tempo: 120, timeSigNumerator: 4, timeSigDenominator: 4,
+    tempoMap: [], timeSignatures: [], loopRegion: null,
+  });
+  editorStateRef.current = {
+    tracks,
+    tempo,
+    timeSigNumerator,
+    timeSigDenominator,
+    tempoMap: projectMetadata?.tempoMap ?? [],
+    timeSignatures: projectMetadata?.timeSignatures ?? [],
+    loopRegion: projectMetadata?.loopRegion ?? null,
+  };
+
+  const cloneSnapshot = (snap: EditorSnapshot): EditorSnapshot => ({
+    tracks: cloneTracks(snap.tracks),
+    tempo: snap.tempo,
+    timeSigNumerator: snap.timeSigNumerator,
+    timeSigDenominator: snap.timeSigDenominator,
+    tempoMap: snap.tempoMap.map((event) => ({ ...event })),
+    timeSignatures: snap.timeSignatures.map((event) => ({ ...event })),
+    loopRegion: snap.loopRegion ? { ...snap.loopRegion } : null,
+  });
+
+  const restoreSnapshot = useCallback((snap: EditorSnapshot) => {
+    setTracks(cloneTracks(snap.tracks));
+    setTempo(snap.tempo);
+    setTimeSigNumerator(snap.timeSigNumerator);
+    setTimeSigDenominator(snap.timeSigDenominator);
+    setProjectMetadata((current) => current
+      ? {
+          ...current,
+          tempoMap: snap.tempoMap.map((event) => ({ ...event })),
+          timeSignatures: snap.timeSignatures.map((event) => ({ ...event })),
+          loopRegion: snap.loopRegion ? { ...snap.loopRegion } : null,
+        }
+      : {
+          id: "",
+          title: "Untitled",
+          tempoMap: snap.tempoMap.map((event) => ({ ...event })),
+          timeSignatures: snap.timeSignatures.map((event) => ({ ...event })),
+          loopRegion: snap.loopRegion ? { ...snap.loopRegion } : null,
+          revisions: [],
+          agentSessions: [],
+        });
+  }, []);
+
   const commitTracks = useCallback((next: MidiTrack[], preserveCandidates = false) => {
-    setTracks((current) => {
-      setPast((history) => [...history.slice(-39), cloneTracks(current)]);
-      setFuture([]);
-      return next;
-    });
+    setPast((history) => [...history.slice(-39), cloneSnapshot(editorStateRef.current)]);
+    setFuture([]);
+    setTracks(next);
     if (!preserveCandidates) setCandidates([]);
   }, []);
 
@@ -903,26 +1076,22 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setPast((history) => {
       if (!history.length) return history;
       const previous = history[history.length - 1];
-      setTracks((current) => {
-        setFuture((items) => [cloneTracks(current), ...items].slice(0, 40));
-        return cloneTracks(previous);
-      });
+      setFuture((items) => [...items.slice(0, 39), cloneSnapshot(editorStateRef.current)]);
+      restoreSnapshot(previous);
       return history.slice(0, -1);
     });
-  }, []);
+  }, [restoreSnapshot]);
 
   const redo = useCallback(() => {
     setCandidates([]);
     setFuture((items) => {
       if (!items.length) return items;
       const next = items[0];
-      setTracks((current) => {
-        setPast((history) => [...history.slice(-39), cloneTracks(current)]);
-        return cloneTracks(next);
-      });
+      setPast((history) => [...history.slice(-39), cloneSnapshot(editorStateRef.current)]);
+      restoreSnapshot(next);
       return items.slice(1);
     });
-  }, []);
+  }, [restoreSnapshot]);
 
   const deleteSelectedNote = useCallback(() => {
     if (!selectedNoteId) return;
@@ -1230,6 +1399,25 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
   };
 
+  /** 下载推荐音源（GeneralUser GS）到系统音源库。 */
+  const downloadRecommendedSoundfont = async () => {
+    if (!magent?.downloadRecommendedInstrument) return showToast("桌面音源桥尚未连接");
+    setRecommendedDownloadBusy(true);
+    try {
+      const result = await magent.downloadRecommendedInstrument();
+      if (result.ok) {
+        await loadInstrumentLibrary();
+        showToast(result.downloaded ? "已下载推荐音源到系统音源库" : "推荐音源已在系统音源库中");
+      } else {
+        showToast(`推荐音源下载失败：${result.error ?? "未知错误"}`);
+      }
+    } catch (error) {
+      showToast(errorMessage(error, "推荐音源下载失败"));
+    } finally {
+      setRecommendedDownloadBusy(false);
+    }
+  };
+
   const openSystemInstrumentFolder = async () => {
     if (!magent?.openInstrumentFolder) return showToast("桌面音源桥尚未连接");
     try {
@@ -1322,7 +1510,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         if (track.muted || (soloActive && !track.solo)) return;
         track.notes.forEach((note) => {
           if (note.startTick >= previous && note.startTick < tick) {
-            void playTrackNote(track, note, Math.min(300, (note.durationTicks / projectPpq) * (60000 / tempo)));
+            void playTrackNote(track, note, Math.min(8000, (note.durationTicks / projectPpq) * (60000 / tempo)));
           }
         });
       });
@@ -1333,6 +1521,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
   }, [isPlaying, playTrackNote, projectPpq, tempo, tracks]);
+
+  // 暂停/停止时立即切断所有发声，避免 SoundFont 延音残留。
+  useEffect(() => {
+    if (!isPlaying) getAudioEngine()?.stopAll();
+  }, [isPlaying]);
 
   const canvasPoint = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1415,7 +1608,10 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   const onCanvasPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!drag) return;
-    setPast((history) => [...history.slice(-39), drag.base]);
+    setPast((history) => [...history.slice(-39), {
+      ...editorStateRef.current,
+      tracks: drag.base.map((track) => ({ ...track, notes: track.notes.map((note) => ({ ...note })) })),
+    }]);
     setFuture([]);
     setCandidates([]);
     setDrag(null);
@@ -1452,6 +1648,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setSelectedTrackId(track.id);
   };
 
+  const deleteSelectedTrack = () => {
+    if (!selectedTrackId) return;
+    const next = tracks.filter((track) => track.id !== selectedTrackId);
+    commitTracks(next);
+    setSelectedTrackId(next[0]?.id ?? "");
+    setSelectedNoteId(null);
+  };
+
   const updateTrack = (id: string, change: Partial<MidiTrack>) => {
     commitTracks(tracks.map((track) => track.id === id ? { ...track, ...change } : track));
   };
@@ -1464,13 +1668,110 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     })));
   };
 
+  const skillsLoadingRef = useRef(false);
+  const loadAgentSkills = useCallback(async () => {
+    if (skillsLoadingRef.current) return;
+    if (!magent?.listAgentSkills) {
+      setAgentSkillsLoaded(true);
+      return;
+    }
+    skillsLoadingRef.current = true;
+    try {
+      setAgentSkills(await magent.listAgentSkills());
+    } catch {
+      // Skill 列表加载失败不影响主流程。
+    } finally {
+      skillsLoadingRef.current = false;
+      setAgentSkillsLoaded(true);
+    }
+  }, [magent]);
+
+  /** 根据文本与光标位置更新 @提及弹窗状态。 */
+  const updateSkillMention = (value: string, caret: number) => {
+    const before = value.slice(0, caret);
+    const atIndex = before.lastIndexOf("@");
+    if (atIndex < 0) {
+      setSkillMention((current) => (current.open ? { ...current, open: false } : current));
+      return;
+    }
+    const token = before.slice(atIndex + 1);
+    if (!/^[A-Za-z0-9_-]*$/.test(token)) {
+      setSkillMention((current) => (current.open ? { ...current, open: false } : current));
+      return;
+    }
+    if (atIndex > 0 && !/\s/.test(before[atIndex - 1])) {
+      setSkillMention((current) => (current.open ? { ...current, open: false } : current));
+      return;
+    }
+    if (agentSkills.length === 0) void loadAgentSkills();
+    setSkillMention({ open: true, query: token, caret, atIndex });
+    setSkillMentionIndex(0);
+  };
+
+  const acceptSkillMention = (skillName: string) => {
+    const { atIndex, caret } = skillMention;
+    setPrompt((current) => `${current.slice(0, atIndex)}@${skillName} ${current.slice(caret)}`);
+    setSkillMention((current) => ({ ...current, open: false }));
+  };
+
+  const closeSkillMention = () => {
+    setSkillMention((current) => (current.open ? { ...current, open: false } : current));
+  };
+
+  const handlePromptKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (skillMention.open) {
+      const filtered = filteredSkills;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSkillMentionIndex((index) => (filtered.length ? (index + 1) % filtered.length : 0));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSkillMentionIndex((index) => (filtered.length ? (index - 1 + filtered.length) % filtered.length : 0));
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const selected = filtered[skillMentionIndex];
+        if (selected) acceptSkillMention(selected.name);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSkillMention();
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void sendPrompt();
+    }
+  };
+
+  const cancelAgentRun = async () => {
+    if (!magent?.cancelAgent) return;
+    try {
+      await magent.cancelAgent();
+    } catch (error) {
+      showToast(errorMessage(error, "取消失败"));
+    }
+  };
+
   const sendPrompt = async () => {
     const clean = prompt.trim();
     if (!clean || agentBusy) return;
     const requestMode = mode;
     setMessages((items) => [...items, { id: uid("message"), author: "user", text: clean }]);
+    const runMessageId = uid("message");
+    runMessageIdRef.current = runMessageId;
+    setMessages((items) => [...items, { id: runMessageId, author: "agent", text: "", thinking: [], streamingThinking: "" }]);
     setPrompt("");
     setAgentBusy(true);
+    setAgentLive({ turns: 0, currentTool: null, toolCalls: {}, skills: [] });
+    const finalizeRunMessage = (patch: Partial<ChatMessage>) => {
+      setMessages((items) => items.map((message) => message.id === runMessageId ? { ...message, ...patch } : message));
+    };
     try {
       if (!magent?.runAgent) {
         const fallback = requestMode === "research"
@@ -1478,7 +1779,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           : requestMode === "plan"
             ? "演示计划：降低结尾力度并清理循环接缝；当前仅展示预览。"
             : "桌面桥尚未连接，已保留演示候选供交互测试。";
-        setMessages((items) => [...items, { id: uid("message"), author: "agent", text: fallback }]);
+        finalizeRunMessage({ text: fallback, thinking: [], streamingThinking: undefined });
         setCandidates(requestMode === "goal" ? seedCandidates.map((candidate) => ({ ...candidate, id: uid("candidate") })) : []);
         return;
       }
@@ -1489,19 +1790,29 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         conversation: conversationSettings,
         focusTrackId: selectedTrack?.id,
       });
-      setMessages((items) => [...items, {
-        id: uid("message"),
-        author: "agent",
+      finalizeRunMessage({
         text: `${response.analysis}${response.provider === "pi-offline" ? "（离线分析）" : ""}`,
         thinking: response.thinking,
-      }]);
+        streamingThinking: undefined,
+        skillTrace: response.skillTrace,
+      });
       setCandidates(requestMode === "research"
         ? []
         : response.candidates.map((changeSet, index) => candidateFromChangeSet(changeSet, index, requestMode)));
     } catch (error) {
-      setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `请求失败：${cleanAgentError(error)}。工程未发生修改。` }]);
+      const message = cleanAgentError(error);
+      if (/已取消/.test(message)) {
+        finalizeRunMessage({ text: "Agent 已取消。工程未发生修改。", thinking: [], streamingThinking: undefined });
+      } else {
+        finalizeRunMessage({ text: `请求失败：${message}。工程未发生修改。`, thinking: [], streamingThinking: undefined });
+      }
       setCandidates([]);
     } finally {
+      liveThinkingRef.current = "";
+      if (liveThinkingUiTimerRef.current != null) window.clearTimeout(liveThinkingUiTimerRef.current);
+      if (liveThinkingFlushTimerRef.current != null) window.clearTimeout(liveThinkingFlushTimerRef.current);
+      liveThinkingUiTimerRef.current = null;
+      liveThinkingFlushTimerRef.current = null;
       setAgentBusy(false);
     }
   };
@@ -1509,8 +1820,26 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const acceptCandidate = (candidate: Candidate) => {
     if (mode !== "goal" || candidate.sourceMode !== "goal" || !candidate.supported || candidate.state) return;
     try {
-      const next = applyNoteChangeSet(tracks, candidate.changeSet);
-      commitTracks(next, true);
+      const applied = applyNoteChangeSet(tracks, candidate.changeSet);
+      commitTracks(applied.tracks, true);
+      if (applied.tempo !== undefined) setTempo(applied.tempo);
+      if (applied.timeSigNumerator !== undefined) setTimeSigNumerator(applied.timeSigNumerator);
+      if (applied.timeSigDenominator !== undefined) setTimeSigDenominator(applied.timeSigDenominator);
+      if (applied.loopRegion !== undefined) {
+        setProjectMetadata((current) => current
+          ? { ...current, loopRegion: applied.loopRegion ? { ...applied.loopRegion } : null }
+          : current);
+      }
+      if (applied.tempoMap) {
+        setProjectMetadata((current) => current
+          ? { ...current, tempoMap: mergeEventsByTick(current.tempoMap, applied.tempoMap!) }
+          : current);
+      }
+      if (applied.timeSignatures) {
+        setProjectMetadata((current) => current
+          ? { ...current, timeSignatures: mergeEventsByTick(current.timeSignatures, applied.timeSignatures!) }
+          : current);
+      }
       setCandidates((items) => items.map((item) => item.id === candidate.id ? { ...item, state: "accepted" } : item));
       setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `已原子应用“${candidate.title}”。全部操作可用 Ctrl+Z 一次撤销。` }]);
       showToast("候选已应用，可一次撤销");
@@ -1525,8 +1854,11 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       showToast(`${source}未返回可用的工程数据`);
       return;
     }
+    getAudioEngine()?.stopAll();
+    setIsPlaying(false);
     const loadedTracks = projectToTracks(result.project);
     setTracks(loadedTracks);
+    setProjectFilePath(source === "工程" ? (result.filePath ?? "") : "");
     setProjectInstruments(result.project.instruments?.map((instrument) => ({ ...instrument })) ?? []);
     setProjectTitle(result.project.title || "Untitled");
     setProjectPpq(result.project.ppq);
@@ -1563,15 +1895,81 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   const handleOpenProject = async () => {
     if (!magent?.openProject) return showToast("桌面文件桥尚未连接");
-    try { loadProjectResult(await magent.openProject(), "工程"); } catch (error) { showToast(errorMessage(error, "未能打开工程文件")); }
+    try {
+      loadProjectResult(await magent.openProject(), "工程");
+      void loadRecentProjects();
+    } catch (error) { showToast(errorMessage(error, "未能打开工程文件")); }
   };
 
-  const handleSaveProject = async () => {
+  /** 新建项目：把编辑器重置为完全空的工程（0 轨道，在当前窗口）。 */
+  const newProject = () => {
+    getAudioEngine()?.stopAll();
+    setProjectFilePath("");
+    setProjectInstruments([]);
+    setProjectTitle("Untitled");
+    setProjectPpq(PPQ);
+    setProjectMetadata(null);
+    setTracks([]);
+    setSelectedTrackId("");
+    setSelectedNoteId(null);
+    setPlayhead(0);
+    setPast([]);
+    setFuture([]);
+    setCandidates([]);
+    setTempo(120);
+    setTimeSigNumerator(4);
+    setTimeSigDenominator(4);
+    setGridTicks(Math.max(1, Math.round(PPQ / 4)));
+    setMessages([{ id: uid("message"), author: "agent", text: WELCOME_MESSAGE }]);
+    showToast("已新建空工程");
+  };
+
+  const persistProject = async (path: string | null) => {
     if (!magent?.saveProject) return showToast("桌面文件桥尚未连接");
     try {
-      const result = await magent.saveProject(projectPayload());
-      if (!result.canceled) showToast("工程已保存");
+      let result: SaveResult;
+      if (path && magent.saveProjectTo) {
+        result = await magent.saveProjectTo(projectPayload(), path);
+      } else {
+        result = await magent.saveProject(projectPayload());
+      }
+      if (!result.canceled) {
+        setProjectFilePath(result.filePath ?? "");
+        showToast("工程已保存");
+        void loadRecentProjects();
+      }
     } catch (error) { showToast(errorMessage(error, "工程保存失败")); }
+  };
+
+  /** 保存项目：有当前路径则免对话框直写，否则弹另存为对话框。 */
+  const handleSaveProject = () => void persistProject(projectFilePath || null);
+  /** 项目另存为：总是弹出对话框选择新路径。 */
+  const saveProjectAs = () => void persistProject(null);
+
+  const openRecentProject = async (path: string) => {
+    if (!magent?.openProjectAt) return showToast("桌面文件桥尚未连接");
+    try {
+      loadProjectResult(await magent.openProjectAt(path), "工程");
+      void loadRecentProjects();
+    } catch (error) { showToast(errorMessage(error, "打开最近工程失败")); }
+  };
+
+  const loadRecentProjects = useCallback(async () => {
+    if (!magent?.listRecentProjects) return;
+    try { setRecentProjects(await magent.listRecentProjects()); } catch { /* 忽略 */ }
+  }, [magent]);
+
+  /** 新建/打开/导入统一先询问：在当前窗口还是新窗口。 */
+  const requestWindowChoice = (intent: ProjectOpenIntent) => setWindowChoice(intent);
+  const confirmWindowChoice = (intent: ProjectOpenIntent, target: "current" | "new") => {
+    setWindowChoice(null);
+    if (target === "new") {
+      void magent?.createProjectWindow(intent);
+      return;
+    }
+    if (intent === "new-project") newProject();
+    else if (intent === "open-project") void handleOpenProject();
+    else void handleOpen();
   };
 
   const handleExport = async () => {
@@ -1582,11 +1980,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     } catch (error) { showToast(errorMessage(error, "导出失败")); }
   };
 
-  const runMenuAction = useCallback((action: string) => {
+  const runMenuAction = useCallback((action: string, payload?: string) => {
     setActiveMenu(null);
-    if (action === "file-open-midi") void handleOpen();
-    else if (action === "file-open-project") void handleOpenProject();
-    else if (action === "file-save-project") void handleSaveProject();
+    if (action === "file-new-project") requestWindowChoice("new-project");
+    else if (action === "file-open-midi") requestWindowChoice("import-midi");
+    else if (action === "file-open-project") requestWindowChoice("open-project");
+    else if (action === "open-recent-project" && payload) openRecentProject(payload);
+    else if (action === "file-save-project") handleSaveProject();
+    else if (action === "file-save-project-as") saveProjectAs();
     else if (action === "file-export-midi") void handleExport();
     else if (action === "edit-undo") undo();
     else if (action === "edit-redo") redo();
@@ -1599,7 +2000,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     else if (action === "plugins-settings") { setSettingsSection("plugins"); setSettingsOpen(true); }
     else if (action === "help-about") showToast("M Agent · 面向独立游戏开发者的桌面 MIDI 创作 Agent");
     else if (action === "help-settings") { setSettingsSection("general"); setSettingsOpen(true); }
-  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, magent, redo, refreshEnvironment, showToast, undo]);
+  }, [magent, openRecentProject, requestWindowChoice, saveProjectAs, handleSaveProject, handleExport, undo, redo, refreshEnvironment, showToast]);
 
   useEffect(() => {
     const onMenuShortcut = (event: KeyboardEvent) => {
@@ -1610,21 +2011,105 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       const mod = event.ctrlKey || event.metaKey;
       if (!mod) return;
       const key = event.key.toLowerCase();
-      if (key === "o" && !event.shiftKey) { event.preventDefault(); void handleOpen(); }
-      else if (key === "o" && event.shiftKey) { event.preventDefault(); void handleOpenProject(); }
-      else if (key === "s" && !event.shiftKey) { event.preventDefault(); void handleSaveProject(); }
-      else if (key === "s" && event.shiftKey) { event.preventDefault(); void handleExport(); }
+      if (key === "n") { event.preventDefault(); requestWindowChoice("new-project"); }
+      else if (key === "o" && !event.shiftKey) { event.preventDefault(); requestWindowChoice("open-project"); }
+      else if (key === "o" && event.shiftKey) { event.preventDefault(); requestWindowChoice("import-midi"); }
+      else if (key === "s" && !event.shiftKey) { event.preventDefault(); handleSaveProject(); }
+      else if (key === "s" && event.shiftKey) { event.preventDefault(); saveProjectAs(); }
       else if (key === "w") { event.preventDefault(); void magent?.closeWindow(); }
     };
     window.addEventListener("keydown", onMenuShortcut);
     return () => window.removeEventListener("keydown", onMenuShortcut);
-  }, [handleExport, handleOpen, handleOpenProject, handleSaveProject, isMac, magent]);
+  }, [isMac, magent, requestWindowChoice, handleSaveProject, saveProjectAs]);
 
   // macOS 原生菜单动作转发到 runMenuAction。
   useEffect(() => {
     if (!magent?.onMenuAction) return;
     return magent.onMenuAction(runMenuAction);
   }, [magent, runMenuAction]);
+
+  // macOS 原生菜单「最近打开项目」点击。
+  useEffect(() => {
+    if (!magent?.onMenuOpenRecent) return;
+    return magent.onMenuOpenRecent(openRecentProject);
+  }, [magent, openRecentProject]);
+
+  // Agent 运行中的实时调用更新（工具调用 / 轮次 / Skill 调用 / 思考增量）。
+  useEffect(() => {
+    if (!magent?.onAgentLive) return;
+    const scheduleThinkingUi = () => {
+      if (liveThinkingUiTimerRef.current != null) return;
+      liveThinkingUiTimerRef.current = window.setTimeout(() => {
+        liveThinkingUiTimerRef.current = null;
+        const text = liveThinkingRef.current;
+        if (!text) return;
+        setMessages((items) => items.map((message) => message.id === runMessageIdRef.current
+          ? { ...message, streamingThinking: text }
+          : message));
+      }, 120);
+    };
+    const scheduleThinkingFlush = () => {
+      if (liveThinkingFlushTimerRef.current != null) window.clearTimeout(liveThinkingFlushTimerRef.current);
+      liveThinkingFlushTimerRef.current = window.setTimeout(() => {
+        liveThinkingFlushTimerRef.current = null;
+        const text = liveThinkingRef.current;
+        liveThinkingRef.current = "";
+        if (!text) return;
+        // 一段思考完成：追加为已收起条目，清除流式占位。
+        setMessages((items) => items.map((message) => message.id === runMessageIdRef.current
+          ? { ...message, thinking: [...(message.thinking ?? []), text], streamingThinking: "" }
+          : message));
+      }, 800);
+    };
+    const unsubscribe = magent.onAgentLive((update) => {
+      if (update.kind === "turn") {
+        setAgentLive((current) => ({ ...current, turns: update.turns }));
+        return;
+      }
+      if (update.kind === "thinking") {
+        liveThinkingRef.current += update.text;
+        scheduleThinkingUi();
+        scheduleThinkingFlush();
+        return;
+      }
+      if (update.kind === "tool_start") {
+        setAgentLive((current) => ({
+          ...current,
+          currentTool: update.name,
+          toolCalls: { ...current.toolCalls, [update.name]: (current.toolCalls[update.name] ?? 0) + 1 },
+        }));
+        return;
+      }
+      if (update.kind === "tool_end") {
+        setAgentLive((current) => ({ ...current, currentTool: null }));
+        return;
+      }
+      if (update.kind === "skill") {
+        setAgentLive((current) => ({
+          ...current,
+          skills: [...current.skills.slice(-7), { skill: update.skill, status: update.status, depth: update.depth, durationMs: update.durationMs }],
+        }));
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (liveThinkingUiTimerRef.current != null) window.clearTimeout(liveThinkingUiTimerRef.current);
+      if (liveThinkingFlushTimerRef.current != null) window.clearTimeout(liveThinkingFlushTimerRef.current);
+      liveThinkingUiTimerRef.current = null;
+      liveThinkingFlushTimerRef.current = null;
+    };
+  }, [magent]);
+
+  useEffect(() => { void loadRecentProjects(); }, [loadRecentProjects]);
+
+  // 新窗口启动意图：新建 / 打开 / 导入在目标窗口内自动执行。
+  useEffect(() => {
+    const intent = magent?.startupIntent;
+    if (intent === "new-project") newProject();
+    else if (intent === "open-project") void handleOpenProject();
+    else if (intent === "import-midi") void handleOpen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [magent]);
 
   // 测试/自动化钩子：允许通过 window 事件触发菜单动作（例如 Electron smoke 在原生菜单模式下打开设置）。
   useEffect(() => {
@@ -1950,6 +2435,27 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     return `${String(bar).padStart(2, "0")}:${beat}:${subdivision}`;
   }, [playhead, projectPpq]);
 
+  /** 工程最长轨道的末尾 tick（无音符为 0）。 */
+  const projectEndTick = useMemo(() => tracks.reduce(
+    (maxTick, track) => Math.max(maxTick, ...track.notes.map((note) => note.startTick + note.durationTicks)),
+    0,
+  ), [tracks]);
+
+  /** 0 基 bar:beat:subdivision（用于时长，空工程为 00:0:0）。 */
+  const formatBarBeat = (tick: number) => {
+    const totalBeats = tick / projectPpq;
+    const bar = Math.max(0, Math.floor(totalBeats / BEATS_PER_BAR));
+    const beat = Math.max(0, Math.floor(totalBeats % BEATS_PER_BAR));
+    const subdivision = Math.max(0, Math.floor((totalBeats % 1) * 4));
+    return `${String(bar).padStart(2, "0")}:${beat}:${subdivision}`;
+  };
+
+  /** tick → mm:ss（按当前 BPM）。 */
+  const formatDuration = (tick: number) => {
+    const seconds = Math.floor(tick * 60 / (projectPpq * tempo));
+    return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  };
+
   const environmentMessages = environmentError
     ? [{ id: "environment-report", message: environmentError, instruction: "请重新检测；若问题持续，请重新启动应用。", action: "repair-app" as const }]
     : environment?.issues ?? [];
@@ -2012,29 +2518,21 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           <div className="brand" aria-label="M Agent">
             <span className="brand-mark">M<span>/</span>A</span>
             <nav className="menu-bar" ref={menuBarRef} aria-label="应用菜单">
-              {menuGroups.map((group) => (
+              {APP_MENU_GROUPS.map((group) => (
                 <div key={group.key} className={`menu-group ${activeMenu === group.key ? "open" : ""}`}>
                   <button
                     type="button"
                     className="menu-trigger"
                     aria-expanded={activeMenu === group.key}
                     onClick={() => setActiveMenu((current) => current === group.key ? null : group.key)}
-                  >{group.label}<span className="menu-access">({group.accessKey})</span></button>
+                  >{group.label}{group.accessKey ? <span className="menu-access">({group.accessKey})</span> : null}</button>
                   {activeMenu === group.key && (
                     <div className="menu-panel" role="menu">
-                      {group.items.map((item) => (
-                        <button
-                          key={`${group.key}-${item.label}`}
-                          type="button"
-                          className="menu-item"
-                          role="menuitem"
-                          disabled={item.disabled}
-                          onClick={() => item.action && runMenuAction(item.action)}
-                        >
-                          <span>{item.label}</span>
-                          {item.shortcut && <kbd>{item.shortcut}</kbd>}
-                        </button>
-                      ))}
+                      <MenuItemList
+                        items={group.items.filter((item) => !item.role && !item.separator)}
+                        recentProjects={recentProjects}
+                        onAction={runMenuAction}
+                      />
                     </div>
                   )}
                 </div>
@@ -2087,7 +2585,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <Icon name={isPlaying ? "pause" : "play"} size={18} />
           </button>
           <button className="icon-button" onClick={() => { setIsPlaying(false); setPlayhead(0); }} aria-label="停止"><Icon name="stop" /></button>
-          <div className="position-readout">{playPosition}</div>
+          <div className="position-readout">{playPosition} / {formatBarBeat(projectEndTick)} / {formatDuration(projectEndTick)}</div>
         </div>
         <label className="transport-field"><span>BPM</span><input type="number" min="40" max="240" value={tempo} onChange={(event) => setTempo(clamp(Number(event.target.value), 40, 240))} /></label>
         <div className="transport-field"><span>拍号</span>
@@ -2191,6 +2689,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               </button>
             ))}
           </div>
+          {tracks.length > 0 && (
           <div className="track-inspector">
             <div className="inspector-label">SELECTED TRACK</div>
             <label><span>名称</span><input value={selectedTrack?.name ?? ""} onChange={(event) => setTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, name: event.target.value } : track))} onBlur={() => setPast((history) => history)} /></label>
@@ -2249,6 +2748,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                 </select>
               </label>
             )}
+            <div className="inspector-track-actions">
+              <button className="danger-text" disabled={!selectedTrackId} onClick={deleteSelectedTrack}><Icon name="trash" />删除轨道</button>
+            </div>
             {selectedNote ? (
               <div className="note-inspector">
                 <div className="inspector-label">SELECTED NOTE</div>
@@ -2258,6 +2760,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               </div>
             ) : <p className="inspector-hint">双击空白处添加音符，拖动右边缘调整长度。</p>}
           </div>
+          )}
         </aside>
 
         <div
@@ -2343,13 +2846,34 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <div key={message.id} className={`message ${message.author}`}>
                 <span className="message-author">{message.author === "agent" ? "M/A" : "YOU"}</span>
                 <div className="message-content">
-                  {conversationSettings.showThinking && message.thinking && message.thinking.length > 0 && (
-                    <details className="thinking-process">
-                      <summary>思考过程 · {message.thinking.length} 段</summary>
-                      {message.thinking.map((thinking, index) => <p key={`${message.id}-thinking-${index}`}>{thinking}</p>)}
-                    </details>
+                  {conversationSettings.showThinking && (
+                    <>
+                      {message.thinking && message.thinking.map((thinking, index) => (
+                        <details key={`${message.id}-thinking-${index}`} className="thinking-process">
+                          <summary>思考 {index + 1}</summary>
+                          <p>{thinking}</p>
+                        </details>
+                      ))}
+                      {message.streamingThinking ? (
+                        <details open className="thinking-process">
+                          <summary>思考中…</summary>
+                          <p>{message.streamingThinking}</p>
+                        </details>
+                      ) : null}
+                    </>
                   )}
                   <div className="message-answer"><MarkdownContent text={message.text} /></div>
+                  {message.skillTrace && message.skillTrace.length > 0 && (
+                    <details className="thinking-process skill-trace">
+                      <summary>Skill 编排 · {message.skillTrace.length} 次调用</summary>
+                      {message.skillTrace.map((entry, index) => (
+                        <p key={`${message.id}-trace-${index}`}>
+                          {entry.parentSkill ? `${entry.parentSkill} → ` : ""}{entry.childSkill} · depth {entry.depth} · {entry.status}
+                          {entry.status === "ok" ? ` · ${entry.operationCount} ops / ${entry.affectedNoteCount} notes` : ""} · {entry.durationMs}ms
+                        </p>
+                      ))}
+                    </details>
+                  )}
                 </div>
               </div>
             ))}
@@ -2377,6 +2901,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             )}
           </div>
 
+          {agentBusy && (
+            <div className="agent-live" role="status" aria-live="polite">
+              <span>轮次 {agentLive.turns}</span>
+              {agentLive.currentTool && <span className="agent-live-tool"><i />正在调用 {agentLive.currentTool}</span>}
+              {Object.keys(agentLive.toolCalls).length > 0 && (
+                <span>工具 {Object.entries(agentLive.toolCalls).map(([name, count]) => `${name}×${count}`).join("、")}</span>
+              )}
+              {agentLive.skills.length > 0 && (
+                <span>Skill {agentLive.skills.map((item) => `${item.skill}${item.status === "ok" ? "✓" : "✗"}`).join(" → ")}</span>
+              )}
+            </div>
+          )}
+
           <div className="prompt-area">
             <div className="prompt-context">
               <span>{selectedTrack ? `范围：${selectedTrack.name}` : "范围：全曲"}</span>
@@ -2396,8 +2933,43 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               )}
               <span>{mode === "goal" ? `最多 ${conversationSettings.goalMaxTurns} 轮` : modeMeta[mode].short}</span>
             </div>
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendPrompt(); } }} placeholder={mode === "research" ? "询问和声、结构或循环问题…" : mode === "plan" ? "描述想要的修改，生成执行计划…" : "例如：让第 7–8 小节更空旷，保持无缝循环…"} />
-            <button className="send-button" disabled={!prompt.trim() || agentBusy} onClick={sendPrompt} aria-label="发送"><Icon name="send" /></button>
+            <div className="prompt-input-wrap" ref={promptWrapRef}>
+              <textarea
+                value={prompt}
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  updateSkillMention(event.target.value, event.target.selectionStart ?? event.target.value.length);
+                }}
+                onKeyDown={handlePromptKeyDown}
+                onBlur={() => window.setTimeout(closeSkillMention, 120)}
+                placeholder={mode === "research" ? "询问和声、结构或循环问题…" : mode === "plan" ? "描述想要的修改，生成执行计划…" : "例如：让第 7–8 小节更空旷，保持无缝循环…"}
+              />
+            </div>
+            {skillMention.open && (
+              <div className="skill-mention-menu" role="listbox" aria-label="选择 Skill">
+                {filteredSkills.length === 0 ? (
+                  <div className="skill-mention-empty">{agentSkillsLoaded ? "无匹配 Skill" : "加载中…"}</div>
+                ) : (
+                  filteredSkills.map((skill, index) => (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      role="option"
+                      aria-selected={index === skillMentionIndex}
+                      className={index === skillMentionIndex ? "active" : ""}
+                      onMouseDown={(event) => { event.preventDefault(); acceptSkillMention(skill.name); }}
+                    >
+                      <strong>@{skill.name}</strong><span>{skill.description}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+            {agentBusy ? (
+              <button className="send-button cancel-button" onClick={() => void cancelAgentRun()} aria-label="取消"><Icon name="close" /></button>
+            ) : (
+              <button className="send-button" disabled={!prompt.trim() || agentBusy} onClick={sendPrompt} aria-label="发送"><Icon name="send" /></button>
+            )}
           </div>
         </aside>
       </main>
@@ -2775,6 +3347,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                           <Icon name="music" size={24} />
                           <strong>暂无音源</strong>
                           <p>点击右上角「添加」绑定当前工程音源，或把音源文件放入系统级音源库目录（音源库 → 打开文件夹）后点击「扫描音源库」。</p>
+                          <button className="primary-button" disabled={recommendedDownloadBusy} onClick={() => void downloadRecommendedSoundfont()}>
+                            {recommendedDownloadBusy ? "下载中…" : "没有音源？下载推荐音源！"}
+                          </button>
                         </div>
                       ) : (
                         <div className="subscription-list">
@@ -2908,6 +3483,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <button className="candidate-secondary" onClick={() => setMigratePrompt(null)}>取消</button>
               <button className="candidate-secondary" onClick={() => void confirmSystemPathChange(false)}>仅更改路径</button>
               <button className="primary-button" onClick={() => void confirmSystemPathChange(true)}>迁移音源</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {windowChoice && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setWindowChoice(null); }}>
+          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="window-choice-title">
+            <span className="modal-kicker">PROJECT TARGET</span>
+            <h3 id="window-choice-title">在哪里打开？</h3>
+            <p className="settings-intro">
+              {windowChoice === "new-project" ? "新建项目" : windowChoice === "open-project" ? "打开项目" : "导入 MIDI"}
+              ：在当前窗口进行，还是另开一个新窗口？
+            </p>
+            <div className="modal-actions">
+              <button className="candidate-secondary" onClick={() => setWindowChoice(null)}>取消</button>
+              <button className="candidate-secondary" onClick={() => confirmWindowChoice(windowChoice, "current")}>当前窗口</button>
+              <button className="primary-button" onClick={() => confirmWindowChoice(windowChoice, "new")}>新窗口</button>
             </div>
           </section>
         </div>

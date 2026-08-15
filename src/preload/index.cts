@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type {
+  AgentLiveUpdate,
   AgentRequestPayload,
   MagentBridge,
+  ProjectOpenIntent,
   RendererProjectPayload,
 } from "../shared/bridge.js";
 import type {
@@ -9,12 +11,24 @@ import type {
   SubscriptionInput,
 } from "../shared/subscriptions.js";
 
+const startupIntent: ProjectOpenIntent | "" = (() => {
+  const arg = process.argv.find((entry) => entry.startsWith("--magent-intent="));
+  const value = arg?.split("=")[1];
+  return value === "new-project" || value === "open-project" || value === "import-midi" ? value : "";
+})();
+
 const bridge: MagentBridge = {
   platform: process.platform,
+  startupIntent,
   onMenuAction: (callback: (action: string) => void) => {
     const listener = (_event: unknown, action: string) => callback(action);
     ipcRenderer.on("menu:action", listener);
     return () => ipcRenderer.removeListener("menu:action", listener);
+  },
+  onMenuOpenRecent: (callback: (path: string) => void) => {
+    const listener = (_event: unknown, path: string) => callback(path);
+    ipcRenderer.on("menu:open-recent", listener);
+    return () => ipcRenderer.removeListener("menu:open-recent", listener);
   },
   openMidi: () => ipcRenderer.invoke("midi:open"),
   exportMidi: (payload: RendererProjectPayload) => ipcRenderer.invoke("midi:export", payload),
@@ -32,6 +46,17 @@ const bridge: MagentBridge = {
   browseShell: () => ipcRenderer.invoke("shell:browse"),
   checkShell: (path: string) => ipcRenderer.invoke("shell:check", path),
   runAgent: (payload: AgentRequestPayload) => ipcRenderer.invoke("agent:run", payload),
+  cancelAgent: () => ipcRenderer.invoke("agent:cancel"),
+  onAgentLive: (callback: (update: AgentLiveUpdate) => void) => {
+    const listener = (_event: unknown, update: AgentLiveUpdate) => callback(update);
+    ipcRenderer.on("agent:live", listener);
+    return () => ipcRenderer.removeListener("agent:live", listener);
+  },
+  listAgentSkills: () => ipcRenderer.invoke("agent:list-skills"),
+  listRecentProjects: () => ipcRenderer.invoke("projects:list-recent"),
+  openProjectAt: (path: string) => ipcRenderer.invoke("project:open-path", path),
+  saveProjectTo: (payload: RendererProjectPayload, path: string) => ipcRenderer.invoke("project:save-to", payload, path),
+  createProjectWindow: (intent: ProjectOpenIntent) => ipcRenderer.invoke("window:create-project", intent),
   listSubscriptions: () => ipcRenderer.invoke("subscriptions:list"),
   createSubscription: (input: SubscriptionInput) => ipcRenderer.invoke("subscriptions:create", input),
   updateSubscription: (id: string, input: SubscriptionInput) => ipcRenderer.invoke("subscriptions:update", id, input),
@@ -47,6 +72,7 @@ const bridge: MagentBridge = {
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
   listInstruments: () => ipcRenderer.invoke("instrument-library:list"),
+  downloadRecommendedInstrument: () => ipcRenderer.invoke("instrument-library:download-recommended"),
   pickInstrumentFiles: () => ipcRenderer.invoke("instrument-library:pick-files"),
   bindInstrumentToProject: (path: string) => ipcRenderer.invoke("instrument-library:bind-instrument", path),
   getInstrumentSystemPath: () => ipcRenderer.invoke("instrument-library:get-system-path"),

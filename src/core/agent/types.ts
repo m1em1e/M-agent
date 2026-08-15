@@ -24,6 +24,10 @@ export const AGENT_TOOL_NAMES = [
   "changes.apply",
   "project.write",
   "midi.export",
+  "skill.read",
+  "skill.invoke",
+  "instrument.search",
+  "track.set-instrument",
 ] as const;
 
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];

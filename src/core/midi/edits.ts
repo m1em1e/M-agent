@@ -275,9 +275,16 @@ function applyOperation(project: MidiProject, operation: MidiEditOperation, idFa
     case "delete_track":
       project.tracks = project.tracks.filter((track) => track.id !== operation.trackId);
       break;
-    case "update_track":
-      Object.assign(project.tracks.find((track) => track.id === operation.trackId)!, withoutUndefined(operation.changes));
+    case "update_track": {
+      const track = project.tracks.find((candidate) => candidate.id === operation.trackId)!;
+      const changes: Record<string, unknown> = { ...operation.changes };
+      if (changes.instrument === null) {
+        delete changes.instrument;
+        track.instrument = undefined;
+      }
+      Object.assign(track, withoutUndefined(changes));
       break;
+    }
     case "set_tempo":
       upsertAtTick(project.tempoMap, { tick: operation.tick, bpm: operation.bpm });
       break;

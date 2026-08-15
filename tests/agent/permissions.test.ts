@@ -15,6 +15,13 @@ describe("agent tool permissions", () => {
     expect(canAgentUseTool("research", "project.write")).toBe(false);
   });
 
+  it("allows instrument search in research but not setting instruments", () => {
+    expect(canAgentUseTool("research", "instrument.search")).toBe(true);
+    expect(canAgentUseTool("research", "track.set-instrument")).toBe(false);
+    expect(canAgentUseTool("plan", "track.set-instrument")).toBe(true);
+    expect(canAgentUseTool("goal", "track.set-instrument")).toBe(true);
+  });
+
   it("allows previews but no persisted mutation in plan and goal modes", () => {
     expect(allowedToolsForMode("plan")).toContain("changes.simulate");
     expect(allowedToolsForMode("goal")).toContain("candidate.score");

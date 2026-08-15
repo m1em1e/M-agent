@@ -4,6 +4,9 @@ const READ_TOOLS: ReadonlySet<AgentToolName> = new Set([
   "project.read",
   "project.analyze",
   "playback.preview",
+  "skill.read",
+  "skill.invoke",
+  "instrument.search",
 ]);
 
 const PLAN_TOOLS: ReadonlySet<AgentToolName> = new Set([
@@ -11,6 +14,7 @@ const PLAN_TOOLS: ReadonlySet<AgentToolName> = new Set([
   "changes.propose",
   "changes.simulate",
   "changes.validate",
+  "track.set-instrument",
 ]);
 
 const GOAL_TOOLS: ReadonlySet<AgentToolName> = new Set([

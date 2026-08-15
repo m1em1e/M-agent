@@ -111,7 +111,10 @@ export type MidiEditOperation =
   | {
       type: "update_track";
       trackId: string;
-      changes: Partial<Pick<MidiTrack, "name" | "role" | "channel" | "program" | "muted" | "solo">>;
+      changes: Partial<Pick<MidiTrack, "name" | "role" | "channel" | "program" | "muted" | "solo">> & {
+        /** 更换轨道音色引用；null 表示清除音色。 */
+        instrument?: InstrumentReference | null;
+      };
     }
   | { type: "set_tempo"; tick: number; bpm: number }
   | {
