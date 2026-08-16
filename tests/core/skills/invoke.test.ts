@@ -137,4 +137,23 @@ describe("invokeSkill success path", () => {
     expect(result.status).toBe("error");
     expect(result.error).toContain("boom");
   });
+
+  it("未设置 childTimeoutMs 时不附加超时信号", async () => {
+    const state = createInvocationState();
+    state.parentSkill = "song-arranger";
+    state.visited = ["song-arranger"];
+    const traces: SkillTraceEntry[] = [];
+    const result = await invokeSkill({
+      skills,
+      project,
+      targetSkill: "harmony-arranger",
+      task: "修和声",
+      state,
+      parent: { requestId: "r1", mode: "goal" },
+      runKernel: cannedRun(),
+      recordTrace: (entry) => traces.push(entry),
+    });
+    expect(result.status).toBe("ok");
+    expect(result.depth).toBe(1);
+  });
 });

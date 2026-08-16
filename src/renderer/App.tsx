@@ -47,6 +47,7 @@ import {
   loadConversationSettings,
   PI_THINKING_LEVELS,
   PROJECT_INJECTION_MODES,
+  SKILL_TIMEOUT_RANGE,
   saveConversationSettings,
   type ConversationSettings,
 } from "../shared/conversation-settings";
@@ -3184,6 +3185,24 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         onChange={(event) => {
                           const value = Number(event.target.value);
                           if (Number.isFinite(value)) setConversationSettings((current) => ({ ...current, goalMaxTokens: Math.min(GOAL_MAX_TOKENS_RANGE.maximum, Math.max(GOAL_MAX_TOKENS_RANGE.minimum, Math.round(value))) }));
+                        }}
+                      />
+                    </label>
+                    <label className="settings-row">
+                      <div><strong>子 Skill 超时（秒）</strong><span>单个子 Skill 调用的兜底超时；留空表示不限制，仅由取消按钮与 Token/轮次预算控制。</span></div>
+                      <input
+                        type="number"
+                        min={SKILL_TIMEOUT_RANGE.minimum}
+                        max={SKILL_TIMEOUT_RANGE.maximum}
+                        step="1"
+                        value={conversationSettings.skillTimeoutMs ?? ""}
+                        data-conversation-setting="skill-timeout"
+                        placeholder="不限制"
+                        onChange={(event) => {
+                          const raw = event.target.value;
+                          if (raw.trim() === "") { setConversationSettings((current) => ({ ...current, skillTimeoutMs: undefined })); return; }
+                          const value = Number(raw);
+                          if (Number.isFinite(value)) setConversationSettings((current) => ({ ...current, skillTimeoutMs: Math.min(SKILL_TIMEOUT_RANGE.maximum, Math.max(SKILL_TIMEOUT_RANGE.minimum, Math.round(value))) }));
                         }}
                       />
                     </label>

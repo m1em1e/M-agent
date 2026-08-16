@@ -17,7 +17,8 @@ export async function collectInstrumentFiles(dir: string): Promise<string[]> {
     for (const entry of entries) {
       const full = join(current, entry.name);
       if (entry.isDirectory()) stack.push(full);
-      else if (entry.isFile() && inferInstrumentTypeFromPath(full)) results.push(full);
+      // 统一用 / 分隔返回相对路径，避免 Windows 反斜杠导致跨平台不一致。
+      else if (entry.isFile() && inferInstrumentTypeFromPath(full)) results.push(full.replace(/\\/g, "/"));
     }
   }
   return results;

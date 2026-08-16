@@ -10,6 +10,7 @@ import {
   GOAL_MAX_TOKENS_RANGE,
   GOAL_MAX_TURNS_RANGE,
   PI_THINKING_LEVELS,
+  SKILL_TIMEOUT_RANGE,
   type ConversationSettings,
 } from "../shared/conversation-settings.js";
 import { rendererPayloadToProject } from "./project-adapter.js";
@@ -56,6 +57,9 @@ export async function runAgent(
     thinkingLevel: conversation.thinkingLevel,
     projectInjection: conversation.projectInjection,
     focusTrackId: payload.focusTrackId,
+    childTimeoutMs: conversation.skillTimeoutMs !== undefined
+      ? conversation.skillTimeoutMs * 1000
+      : undefined,
     skills,
     skill,
     instruments,
@@ -188,5 +192,11 @@ function assertConversationSettings(value: unknown): asserts value is Conversati
   }
   if (settings.projectInjection !== undefined && settings.projectInjection !== "all" && settings.projectInjection !== "selected") {
     throw new Error("工程注入方式无效。");
+  }
+  if (settings.skillTimeoutMs !== undefined
+    && (!Number.isSafeInteger(settings.skillTimeoutMs)
+      || settings.skillTimeoutMs < SKILL_TIMEOUT_RANGE.minimum
+      || settings.skillTimeoutMs > SKILL_TIMEOUT_RANGE.maximum)) {
+    throw new Error(`子 Skill 超时必须留空或为 ${SKILL_TIMEOUT_RANGE.minimum}–${SKILL_TIMEOUT_RANGE.maximum} 的整数秒。`);
   }
 }

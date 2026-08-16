@@ -62,7 +62,7 @@ export interface InvokeSkillOptions {
     signal?: AbortSignal;
   };
   runKernel: ChildRunKernel;
-  /** 子 Skill 运行超时（毫秒）。 */
+  /** 子 Skill 运行超时（毫秒）。留空表示不限时。 */
   childTimeoutMs?: number;
   recordTrace: (entry: SkillTraceEntry) => void;
 }
@@ -129,9 +129,11 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
       depth: childDepth,
       taskContext: options.context,
     },
-    // 子 Skill 独立超时作为兜底（父级取消会经 parent.signal 一并中止）。默认 300s：
-    // 单次子模型对话在慢供应商上可能需要数分钟，45s 太短会误杀正常子调用。
-    signal: combineSignals(options.childTimeoutMs ?? 300_000, options.parent.signal),
+    // 子 Skill 独立超时作为兜底（父级取消会经 parent.signal 一并中止）。
+    // 留空（childTimeoutMs 未设置）表示不限时，仅由父级取消/预算控制。
+    signal: options.childTimeoutMs !== undefined
+      ? combineSignals(options.childTimeoutMs, options.parent.signal)
+      : options.parent.signal,
   };
 
   try {

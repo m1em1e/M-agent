@@ -14,11 +14,14 @@ export interface ConversationSettings {
   goalMaxTokens: number;
   /** 工程注入方式：selected 注入概览 + 选中轨道音符明细；all 注入完整工程 JSON。 */
   projectInjection: ProjectInjectionMode;
+  /** 子 Skill 调用兜底超时（秒）。undefined 表示不限时，仅由取消/预算控制。 */
+  skillTimeoutMs?: number;
 }
 
 export const CONVERSATION_SETTINGS_STORAGE_KEY = "magent.conversation.v1";
 export const GOAL_MAX_TURNS_RANGE = { minimum: 1, maximum: 100 } as const;
 export const GOAL_MAX_TOKENS_RANGE = { minimum: 1_024, maximum: 2_000_000 } as const;
+export const SKILL_TIMEOUT_RANGE = { minimum: 1, maximum: 3_600 } as const;
 
 export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   showThinking: true,
@@ -26,6 +29,7 @@ export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   goalMaxTurns: 20,
   goalMaxTokens: 500_000,
   projectInjection: "all",
+  skillTimeoutMs: undefined,
 };
 
 const thinkingLevels = new Set<string>(PI_THINKING_LEVELS);
@@ -52,6 +56,11 @@ export function normalizeConversationSettings(value: unknown): ConversationSetti
     projectInjection: typeof candidate.projectInjection === "string" && injectionModes.has(candidate.projectInjection)
       ? candidate.projectInjection as ProjectInjectionMode
       : DEFAULT_CONVERSATION_SETTINGS.projectInjection,
+    skillTimeoutMs: typeof candidate.skillTimeoutMs === "number" && Number.isFinite(candidate.skillTimeoutMs)
+      ? clampInteger(candidate.skillTimeoutMs, SKILL_TIMEOUT_RANGE.minimum, SKILL_TIMEOUT_RANGE.maximum)
+      : candidate.skillTimeoutMs === undefined
+        ? undefined
+        : DEFAULT_CONVERSATION_SETTINGS.skillTimeoutMs,
   };
 }
 

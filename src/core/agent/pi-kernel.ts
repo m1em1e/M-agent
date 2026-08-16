@@ -68,6 +68,8 @@ export interface PiKernelRequest {
   projectInjection?: "all" | "selected";
   /** 配合 projectInjection === "selected" 使用；不存在时回退到完整工程。 */
   focusTrackId?: string;
+  /** 子 Skill 调用兜底超时（毫秒）。undefined 表示不限时。 */
+  childTimeoutMs?: number;
   /** 本次运行可用的 Skill 定义（由主进程加载）。 */
   skills?: SkillDefinition[];
   /** 系统音源库条目（用于 instrument_search）。工程级音源在 project.instruments 中。 */
@@ -546,6 +548,7 @@ function createTools(
         },
         runKernel,
         recordTrace,
+        childTimeoutMs: request.childTimeoutMs,
       });
       skillResults.push(result);
       return {

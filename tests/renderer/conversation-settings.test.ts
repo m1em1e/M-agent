@@ -18,6 +18,7 @@ describe("conversation settings", () => {
       goalMaxTurns: 20,
       goalMaxTokens: 500_000,
       projectInjection: "all",
+      skillTimeoutMs: undefined,
     });
     expect(PI_THINKING_LEVELS).toEqual(["low", "medium", "high"]);
   });
@@ -31,18 +32,27 @@ describe("conversation settings", () => {
       goalMaxTurns: 500,
       goalMaxTokens: 10,
       projectInjection: "selected",
+      skillTimeoutMs: 9999,
     })).toEqual({
       showThinking: false,
       thinkingLevel: "medium",
       goalMaxTurns: 100,
       goalMaxTokens: 1_024,
       projectInjection: "selected",
+      skillTimeoutMs: 3_600,
     });
   });
 
   it("defaults an unknown injection mode to all tracks", () => {
     expect(normalizeConversationSettings({ projectInjection: "bogus" }).projectInjection).toBe("all");
     expect(parseConversationSettings('{"projectInjection":"selected"}').projectInjection).toBe("selected");
+  });
+
+  it("keeps skill timeout unset when blank or invalid and clamps valid seconds", () => {
+    expect(normalizeConversationSettings({ skillTimeoutMs: undefined }).skillTimeoutMs).toBeUndefined();
+    expect(normalizeConversationSettings({ skillTimeoutMs: 0 }).skillTimeoutMs).toBe(1);
+    expect(normalizeConversationSettings({ skillTimeoutMs: -5 }).skillTimeoutMs).toBe(1);
+    expect(normalizeConversationSettings({ skillTimeoutMs: 120 }).skillTimeoutMs).toBe(120);
   });
 
   it("round-trips through storage and tolerates storage failures", () => {
@@ -57,6 +67,7 @@ describe("conversation settings", () => {
       goalMaxTurns: 24,
       goalMaxTokens: 750_000,
       projectInjection: "selected",
+      skillTimeoutMs: 300,
     };
     saveConversationSettings(settings, storage);
     expect(values.has(CONVERSATION_SETTINGS_STORAGE_KEY)).toBe(true);
