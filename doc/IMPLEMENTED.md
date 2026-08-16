@@ -126,7 +126,7 @@
   `WorkletSynthesizer.startOfflineRender` 按时间精确渲染；SFZ 采样（`selectSfzRegions` + AudioBufferSourceNode）
   与振荡器回退轨道用标准 Web Audio 节点按绝对时间排程；各层最后混音。渲染前校验时长上限（超限抛 `ExportTooLongError`）。
 - **编码**：WAV 用 `spessasynth_lib` 的 `audioBufferToWav`（零新增依赖）；OGG(Vorbis) 用 `wasm-media-encoders`
-  （新增依赖，WASM 内联，CSP `wasm-unsafe-eval` 即可）。
+  （新增依赖，WASM 内联为 `data:` URL 加载，故 CSP `connect-src` 需含 `data:`，`wasm-unsafe-eval` 亦已配置）。
 - **落盘**：`audio:export` IPC（校验字节上限 → 保存对话框 → 写盘），bridge/preload 新增 `exportAudio`。
 - **MIDI 导出增强**：`exportMidi` 对带 SoundFont 音色引用的轨道写出 CC0/CC32 bank select，保留音色 fidelity。
 - **UI**：文件菜单「导出 WAV / 导出 OGG」打开导出弹窗（采样率 44100/48000 可选手动，范围=完整工程，导出/取消）；
