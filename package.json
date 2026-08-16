@@ -32,6 +32,7 @@
     "remark-gfm": "^4.0.1",
     "spessasynth_core": "^4.3.17",
     "spessasynth_lib": "^4.3.13",
+    "wasm-media-encoders": "^0.7.0",
     "zod": "^4.0.17"
   },
   "devDependencies": {

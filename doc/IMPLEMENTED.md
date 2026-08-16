@@ -115,12 +115,30 @@
 - 菜单单一数据源 `src/shared/menu.ts`（`APP_MENU_GROUPS`）：macOS 原生 Menu Bar 与 Windows/Linux 应用内菜单共用。
 - macOS 标题栏去掉 logo 与应用内菜单栏，红绿灯按钮垂直居中（`--titlebar-h: 40px`）；菜单动作经 `menu:action` IPC 转发执行。
 - 「文件」菜单：新建项目 / 打开项目 / 最近打开项目（主进程 electron-store 持久化最近 8 个 .magent，原生与 in-app 同步）/
-  保存项目（有路径免对话框直写）/ 项目另存为 / 导入（.magent / MIDI）/ 导出 MIDI / 关闭项目。
+  保存项目（有路径免对话框直写）/ 项目另存为 / 导入（.magent / MIDI）/ 导出 MIDI / 导出 WAV / 导出 OGG / 关闭项目。
 - 新建/打开/导入询问「当前窗口 or 新窗口」：新窗口经 `window:create-project` + `--magent-intent` 自动执行对应操作。
 
-## 10. 验证记录
+## 10. 音频导出（WAV / OGG）
 
-- `npm run typecheck`、`npm test`（31 文件 / 170 项通过）、`npm run build`、`npm run test:electron` 均通过。
+- **渲染**（`src/renderer/audio/render-project.ts`，新增）：`renderProjectToBuffer` 用 `OfflineAudioContext` 离线渲染完整工程
+  （tick 0 → 最长轨道末尾，追加 2s 释放尾音，遵守 mute/solo，与播放一致）；空工程输出 1s 静音。
+  SoundFont 轨道按音源库分组，用子集 MIDI（`exportMidi` + `BasicMIDI.fromArrayBuffer`）经 SpessaSynth
+  `WorkletSynthesizer.startOfflineRender` 按时间精确渲染；SFZ 采样（`selectSfzRegions` + AudioBufferSourceNode）
+  与振荡器回退轨道用标准 Web Audio 节点按绝对时间排程；各层最后混音。渲染前校验时长上限（超限抛 `ExportTooLongError`）。
+- **编码**：WAV 用 `spessasynth_lib` 的 `audioBufferToWav`（零新增依赖）；OGG(Vorbis) 用 `wasm-media-encoders`
+  （新增依赖，WASM 内联，CSP `wasm-unsafe-eval` 即可）。
+- **落盘**：`audio:export` IPC（校验字节上限 → 保存对话框 → 写盘），bridge/preload 新增 `exportAudio`。
+- **MIDI 导出增强**：`exportMidi` 对带 SoundFont 音色引用的轨道写出 CC0/CC32 bank select，保留音色 fidelity。
+- **UI**：文件菜单「导出 WAV / 导出 OGG」打开导出弹窗（采样率 44100/48000 可选手动，范围=完整工程，导出/取消）；
+  `exportBusy` 忙碌态与 toast。
+- **设置**：通用 → 导出 → 渲染时长上限（默认 10 分钟，本机持久化 `magent.export.v1`）。
+
+## 11. 验证记录
+
+- `npm run typecheck`、`npm test`（35 文件 / 181 项通过）、`npm run build`、`npm run test:electron` 均通过。
+- 音频导出专项验证：Phase 0 在真实 Electron 里验证 `WorkletSynthesizer` + `OfflineAudioContext` 时序正确
+  （两音符 MIDI 分别在 0s/1s 起音）；端到端用真实代码渲染「SoundFont + 振荡器」工程，
+  得到 WAV（RIFF/WAVE 魔数、~617KB）与 OGG（OggS 魔数、~25KB）均有效。
 - 真实 Electron 烟测覆盖：页面渲染、sandbox preload、环境诊断 IPC、五板块设置导航、主题切换/持久化、
   对话设置持久化、Pi 思考摘要、Pi 离线调研链路。
 - P0-1 大型工程分析栈溢出已修复（`pitchRange` 单次循环，130,000 音符回归测试）；P0-2 Electron 已升级到 43.4.0（`npm audit` 归零）。

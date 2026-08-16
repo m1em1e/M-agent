@@ -35,6 +35,8 @@ const currentDir = dirname(fileURLToPath(import.meta.url));
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const MAX_MIDI_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_PROJECT_FILE_BYTES = 32 * 1024 * 1024;
+/** 音频导出字节上限（WAV 最大约 30 分钟 @48kHz 立体声 16bit）。 */
+const MAX_AUDIO_EXPORT_BYTES = 512 * 1024 * 1024;
 const UI_ZOOM_FACTOR = 1.15;
 
 if (process.platform === "win32") {
@@ -156,6 +158,17 @@ ipcMain.handle("midi:export", async (_event, payload: RendererProjectPayload) =>
   const selected = await dialog.showSaveDialog({ defaultPath: `${project.title}.mid`, filters: [{ name: "MIDI", extensions: ["mid"] }] });
   if (selected.canceled || !selected.filePath) return { canceled: true };
   await writeFile(selected.filePath, exportMidi(project, { format: 1 }));
+  return { canceled: false, filePath: selected.filePath };
+});
+
+ipcMain.handle("audio:export", async (_event, payload: unknown) => {
+  const request = readAudioExportPayload(payload);
+  const extension = request.format === "ogg" ? "ogg" : "wav";
+  const defaultPath = `${sanitizeExportName(request.defaultName)}.${extension}`;
+  const selected = await dialog.showSaveDialog({ defaultPath, filters: [{ name: request.format === "ogg" ? "Ogg Vorbis 音频" : "WAV 音频", extensions: [extension] }] });
+  if (selected.canceled || !selected.filePath) return { canceled: true };
+  if (request.bytes.byteLength > MAX_AUDIO_EXPORT_BYTES) throw new Error("导出音频文件超过允许的大小上限。");
+  await writeFile(selected.filePath, Buffer.from(request.bytes));
   return { canceled: false, filePath: selected.filePath };
 });
 
@@ -345,6 +358,41 @@ async function assertFileSize(filePath: string, maximumBytes: number, label: str
   const info = await stat(filePath);
   if (!info.isFile()) throw new Error(`${label}路径不是普通文件。`);
   if (info.size > maximumBytes) throw new Error(`${label}超过允许的大小上限。`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface AudioExportPayload {
+  format: "wav" | "ogg";
+  bytes: Uint8Array;
+  defaultName: string;
+}
+
+function readAudioExportPayload(payload: unknown): AudioExportPayload {
+  if (!isRecord(payload) || typeof payload.format !== "string" || !(payload.format === "wav" || payload.format === "ogg")) {
+    throw new Error("音频导出参数无效。");
+  }
+  if (typeof payload.defaultName !== "string" || !payload.defaultName.trim()) {
+    throw new Error("音频导出缺少默认文件名。");
+  }
+  const bytes = bytesOf(payload.bytes);
+  if (bytes === null) {
+    throw new Error("音频导出缺少音频字节。");
+  }
+  return { format: payload.format, bytes, defaultName: payload.defaultName };
+}
+
+function bytesOf(value: unknown): Uint8Array | null {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  return null;
+}
+
+function sanitizeExportName(name: string): string {
+  const cleaned = name.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").slice(0, 120);
+  return cleaned || "audio";
 }
 
 async function openProjectFile(filePath: string): Promise<{ canceled: false; filePath: string; project: MidiProject }> {

@@ -279,6 +279,11 @@ function buildConductorEvents(project: MidiProject): RawEvent[] {
 function buildTrackEvents(track: MidiTrack): RawEvent[] {
   let sequence = 0;
   const events: RawEvent[] = [{ tick: 0, priority: 0, sequence: sequence++, bytes: metaText(0x03, track.name) }];
+  // 音色引用（SoundFont）写出 bank select，保留音色 fidelity；SFZ/无引用轨道只写 program。
+  if (track.instrument?.type === "soundfont") {
+    events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xb0 | track.channel, 0, Math.floor(track.instrument.bank / 128)] });
+    events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xb0 | track.channel, 32, track.instrument.bank % 128] });
+  }
   events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xc0 | track.channel, track.program] });
   for (const note of track.notes) {
     events.push({ tick: note.startTick, priority: 3, sequence: sequence++, bytes: [0x90 | track.channel, note.pitch, note.velocity] });

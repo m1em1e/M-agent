@@ -64,6 +64,27 @@ describe("Standard MIDI File Type 1", () => {
     expect(imported.warnings).toEqual([]);
     expect(musicalSnapshot(imported.project)).toEqual(musicalSnapshot(source));
   });
+
+  it("writes bank select for soundfont instrument tracks and keeps program on round trip", () => {
+    const source = projectFixture();
+    source.tracks[0].instrument = { type: "soundfont", libraryId: "lib", bank: 0x2003, program: 12 };
+    source.tracks[0].program = 12;
+    const encoded = exportMidi(source, { format: 1 });
+    const bytes = Array.from(encoded);
+    const hasSequence = (pattern: number[]) => bytes.some((_, index) => pattern.every((value, offset) => bytes[index + offset] === value));
+    expect(hasSequence([0xb0, 0x00, 0x40])).toBe(true); // CC0 = bankMSB(64)
+    expect(hasSequence([0xb0, 0x20, 0x03])).toBe(true); // CC32 = bankLSB(3)
+    expect(hasSequence([0xc0, 0x0c])).toBe(true); // program 12
+    const imported = importMidi(encoded, { title: "Imported" });
+    expect(imported.project.tracks[0].program).toBe(12);
+    expect(musicalSnapshot(imported.project)).toEqual(musicalSnapshot(source));
+  });
+
+  it("omits bank select for tracks without a soundfont instrument", () => {
+    const source = projectFixture();
+    const encoded = exportMidi(source, { format: 1 });
+    expect(Array.from(encoded)).not.toContain(0xb0);
+  });
 });
 
 describe("Standard MIDI File Type 0", () => {

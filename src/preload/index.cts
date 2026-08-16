@@ -32,6 +32,7 @@ const bridge: MagentBridge = {
   },
   openMidi: () => ipcRenderer.invoke("midi:open"),
   exportMidi: (payload: RendererProjectPayload) => ipcRenderer.invoke("midi:export", payload),
+  exportAudio: (payload) => ipcRenderer.invoke("audio:export", payload),
   openProject: () => ipcRenderer.invoke("project:open"),
   saveProject: (payload: RendererProjectPayload) => ipcRenderer.invoke("project:save", payload),
   saveApiKey: (key: string) => ipcRenderer.invoke("settings:save-api-key", key),

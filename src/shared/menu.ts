@@ -54,6 +54,8 @@ export const APP_MENU_GROUPS: AppMenuGroup[] = [
         ],
       },
       { label: "导出 MIDI", action: "file-export-midi" },
+      { label: "导出 WAV", action: "file-export-wav" },
+      { label: "导出 OGG", action: "file-export-ogg" },
       { separator: true, label: "" },
       { label: "关闭项目", action: "window-close", shortcut: "Ctrl+W", accelerator: "CmdOrCtrl+W" },
     ],

@@ -184,6 +184,8 @@ export interface MagentBridge {
   onMenuAction(callback: (action: string) => void): () => void;
   openMidi(): Promise<OpenMidiResult>;
   exportMidi(payload: RendererProjectPayload): Promise<SaveResult>;
+  /** 导出离线渲染的音频字节（WAV/OGG）到用户选择的位置。 */
+  exportAudio(payload: { format: "wav" | "ogg"; bytes: ArrayBuffer; defaultName: string }): Promise<SaveResult>;
   openProject(): Promise<OpenMidiResult>;
   saveProject(payload: RendererProjectPayload): Promise<SaveResult>;
   saveApiKey(key: string): Promise<void>;

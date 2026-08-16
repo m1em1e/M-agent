@@ -51,6 +51,21 @@ import {
   type ConversationSettings,
 } from "../shared/conversation-settings";
 import {
+  DEFAULT_EXPORT_SAMPLE_RATE,
+  EXPORT_MAX_MINUTES_RANGE,
+  EXPORT_SAMPLE_RATES,
+  loadExportSettings,
+  saveExportSettings,
+  type ExportSampleRate,
+  type ExportSettings,
+} from "../shared/export-settings";
+import {
+  encodeAudioBuffer,
+  ExportTooLongError,
+  renderProjectToBuffer,
+  type ExportAudioFormat,
+} from "./audio/render-project";
+import {
   APPEARANCE_MODES,
   applyAppearancePreferences,
   saveAppearancePreferences,
@@ -743,6 +758,10 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [appearance, setAppearance] = useState<AppearancePreferences>(initialAppearance);
   const [conversationSettings, setConversationSettings] = useState<ConversationSettings>(loadConversationSettings);
+  const [exportSettings, setExportSettings] = useState<ExportSettings>(loadExportSettings);
+  const [exportDialog, setExportDialog] = useState<null | ExportAudioFormat>(null);
+  const [exportSampleRate, setExportSampleRate] = useState<ExportSampleRate>(DEFAULT_EXPORT_SAMPLE_RATE);
+  const [exportBusy, setExportBusy] = useState(false);
   const [shellPath, setShellPath] = useState(DEFAULT_SHELL_SETTINGS.path);
   const [shellCheck, setShellCheck] = useState<ShellCheckResult | null>(null);
   const [shellBusy, setShellBusy] = useState(false);
@@ -855,6 +874,10 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   useEffect(() => {
     saveConversationSettings(conversationSettings);
   }, [conversationSettings]);
+
+  useEffect(() => {
+    saveExportSettings(exportSettings);
+  }, [exportSettings]);
 
   useEffect(() => () => {
     document.body.classList.remove("workspace-resizing");
@@ -1982,6 +2005,42 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     } catch (error) { showToast(errorMessage(error, "导出失败")); }
   };
 
+  /** 离线渲染 + 编码 + 保存 WAV/OGG。 */
+  const handleExportAudio = async (format: ExportAudioFormat, sampleRate: ExportSampleRate) => {
+    if (exportBusy) return;
+    if (!magent?.exportAudio) {
+      setExportDialog(null);
+      return showToast("桌面文件桥尚未连接，音频导出不可用");
+    }
+    setExportBusy(true);
+    try {
+      const buffer = await renderProjectToBuffer({
+        title: projectTitle,
+        tracks,
+        ppq: projectPpq,
+        tempo,
+        sampleRate,
+        maxSeconds: exportSettings.maxMinutes * 60,
+        resolveInstrument: (libraryId) => {
+          const entry = findInstrumentEntry(libraryId);
+          return entry ? { path: entry.path, enabled: entry.enabled, sfzRegions: entry.sfzRegions } : undefined;
+        },
+        fetchBytes: async (path) => {
+          if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
+          return magent.readInstrumentFile(path);
+        },
+      });
+      const bytes = await encodeAudioBuffer(buffer, format);
+      const result = await magent.exportAudio({ format, bytes, defaultName: `${projectTitle || "audio"}` });
+      if (!result.canceled) showToast(format === "ogg" ? "OGG 音频已导出" : "WAV 音频已导出");
+    } catch (error) {
+      showToast(errorMessage(error, "音频导出失败"));
+    } finally {
+      setExportBusy(false);
+      setExportDialog(null);
+    }
+  };
+
   const runMenuAction = useCallback((action: string, payload?: string) => {
     setActiveMenu(null);
     if (action === "file-new-project") requestWindowChoice("new-project");
@@ -1991,6 +2050,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     else if (action === "file-save-project") handleSaveProject();
     else if (action === "file-save-project-as") saveProjectAs();
     else if (action === "file-export-midi") void handleExport();
+    else if (action === "file-export-wav") setExportDialog("wav");
+    else if (action === "file-export-ogg") setExportDialog("ogg");
     else if (action === "edit-undo") undo();
     else if (action === "edit-redo") redo();
     else if (action === "view-check-environment") void refreshEnvironment();
@@ -2003,7 +2064,6 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     else if (action === "help-about") showToast("M Agent · 面向独立游戏开发者的桌面 MIDI 创作 Agent");
     else if (action === "help-settings") { setSettingsSection("general"); setSettingsOpen(true); }
   }, [magent, openRecentProject, requestWindowChoice, saveProjectAs, handleSaveProject, handleExport, undo, redo, refreshEnvironment, showToast]);
-
   useEffect(() => {
     const onMenuShortcut = (event: KeyboardEvent) => {
       // macOS 由原生菜单加速键处理，避免与 in-app 快捷键重复触发。
@@ -3138,6 +3198,27 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                       </select>
                     </label>
                   </section>
+                  <section className="settings-group export-settings">
+                    <div className="settings-group-heading"><div><strong>导出</strong><span>控制 WAV / OGG 音频导出的渲染时长上限，修改会立即保存在本机。</span></div></div>
+                    <label className="settings-row">
+                      <div><strong>渲染时长上限</strong><span>超出上限的工程会拒绝导出，避免超大工程长时间占用资源。</span></div>
+                      <input
+                        type="number"
+                        min={EXPORT_MAX_MINUTES_RANGE.minimum}
+                        max={EXPORT_MAX_MINUTES_RANGE.maximum}
+                        step="1"
+                        value={exportSettings.maxMinutes}
+                        data-export-setting="max-minutes"
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (Number.isFinite(value)) setExportSettings((current) => ({
+                            ...current,
+                            maxMinutes: Math.min(EXPORT_MAX_MINUTES_RANGE.maximum, Math.max(EXPORT_MAX_MINUTES_RANGE.minimum, Math.round(value))),
+                          }));
+                        }}
+                      />
+                    </label>
+                  </section>
                   <section className="settings-group shell-settings" id="shell-settings">
                     <div className="settings-group-heading"><div><strong>Shell 路径</strong><span>选择应用统一使用的 Bash、Windows PowerShell 或 PowerShell 7。只有检测通过后才会保存并生效。</span></div></div>
                     <label className="shell-path-field">
@@ -3514,6 +3595,30 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <button className="candidate-secondary" onClick={() => setWindowChoice(null)}>取消</button>
               <button className="candidate-secondary" onClick={() => confirmWindowChoice(windowChoice, "current")}>当前窗口</button>
               <button className="primary-button" onClick={() => confirmWindowChoice(windowChoice, "new")}>新窗口</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {exportDialog && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !exportBusy) setExportDialog(null); }}>
+          <section className="modal migrate-modal" role="dialog" aria-modal="true" aria-labelledby="export-audio-title">
+            <span className="modal-kicker">AUDIO EXPORT</span>
+            <h3 id="export-audio-title">导出{exportDialog === "ogg" ? " OGG" : " WAV"} 音频</h3>
+            <p className="settings-intro">
+              离线渲染完整工程为{exportDialog === "ogg" ? " Ogg Vorbis（.ogg）" : " WAV（.wav）"}。
+              包含 SoundFont 采样、SFZ 采样与振荡器回退轨道，时长随最长轨道并附加释放尾音。
+            </p>
+            <label className="settings-row">
+              <div><strong>采样率</strong><span>越高保真越好、文件越大。</span></div>
+              <select value={exportSampleRate} onChange={(event) => setExportSampleRate(Number(event.target.value) as ExportSampleRate)}>
+                {EXPORT_SAMPLE_RATES.map((rate) => <option key={rate} value={rate}>{rate} Hz</option>)}
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button className="candidate-secondary" disabled={exportBusy} onClick={() => setExportDialog(null)}>取消</button>
+              <button className="primary-button" disabled={exportBusy} onClick={() => void handleExportAudio(exportDialog, exportSampleRate)}>
+                {exportBusy ? "正在渲染并编码…" : "导出"}
+              </button>
             </div>
           </section>
         </div>
