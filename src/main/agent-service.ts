@@ -1,9 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { runPiKernel } from "../core/agent/pi-kernel.js";
 import type { AgentLiveUpdate, AgentRequestPayload, AgentResponsePayload } from "../shared/bridge.js";
-import { getSkill } from "../core/agent/skills/registry.js";
-import type { SkillDefinition } from "../core/agent/skills/types.js";
-import { loadAvailableSkills } from "./skill-loader.js";
+import type { SkillLoader } from "../core/agent/skills/loader.js";
+import { createSkillLoader } from "./skill-loader.js";
 import { listSystemInstruments } from "./audio/library-store.js";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
@@ -30,14 +29,15 @@ export async function runAgent(
   assertAgentRequestPayload(input);
   const payload = input;
   const conversation = payload.conversation ?? DEFAULT_CONVERSATION_SETTINGS;
-  const skills = await loadAvailableSkills();
+  const skillLoader = createSkillLoader();
+  const skillMetas = await skillLoader.list();
   let instruments: Awaited<ReturnType<typeof listSystemInstruments>> = [];
   try {
     instruments = await listSystemInstruments();
   } catch {
     // 音源库不可用时，agent 仍可运行（instrument_search 为空）。
   }
-  const { objective, skill } = resolveTopLevelSkill(payload.objective.trim(), skills);
+  const { objective, skill } = await resolveTopLevelSkill(payload.objective.trim(), skillLoader);
   const buildRequest = (): Parameters<typeof runPiKernel>[0] => ({
     requestId: randomUUID(),
     mode: payload.mode,
@@ -60,7 +60,8 @@ export async function runAgent(
     childTimeoutMs: conversation.skillTimeoutMs !== undefined
       ? conversation.skillTimeoutMs * 1000
       : undefined,
-    skills,
+    skills: skillMetas,
+    skillLoader,
     skill,
     instruments,
     onLive,
@@ -115,15 +116,16 @@ export async function runAgent(
 /**
  * 解析 objective 开头的 @skill-name：解析为顶层 Skill 作用域，并剥掉提及。
  * 未知 Skill 抛错；无 @ 时保持原目标与无 Skill 作用域。
+ * 顶层 Skill 的完整 SKILL.md 经 loader 按需加载（progressive disclosure）。
  */
-export function resolveTopLevelSkill(
+export async function resolveTopLevelSkill(
   objective: string,
-  skills: SkillDefinition[],
-): { objective: string; skill?: NonNullable<Parameters<typeof runPiKernel>[0]["skill"]> } {
+  loader: SkillLoader,
+): Promise<{ objective: string; skill?: NonNullable<Parameters<typeof runPiKernel>[0]["skill"]> }> {
   const match = /^@([A-Za-z0-9_-]+)(\s+|$)/.exec(objective);
   if (!match) return { objective };
   const name = match[1];
-  const skill = getSkill(skills, name);
+  const skill = await loader.load(name);
   if (!skill) throw new Error(`未找到 Skill：${name}`);
   return {
     objective: objective.slice(match[0].length).trim(),

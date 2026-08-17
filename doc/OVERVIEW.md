@@ -64,7 +64,7 @@ React Renderer
 - `src/renderer/`：React UI（钢琴卷帘、轨道、设置五板块、Agent 面板、音源栏）。
 - `src/core/`：纯逻辑（midi 数据/编辑、agent pi-kernel、skills、audio 抽象、sfz-parser）。
 - `src/shared/`：跨进程类型契约（midi / bridge / instrument / menu / subscriptions 等）。
-- `skills/`：7 份内置 SKILL.md（打包经 `extraResources` 放入 `resources/skills`）。
+- `skills/`：4 份内置 SKILL.md（打包经 `extraResources` 放入 `resources/skills`）。
 - `tests/`：Vitest 单元/集成测试。
 - `doc/`：总览、已实现、未完成与音频导出计划。
 

@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { createMidiProject } from "../../../src/core/midi";
 import { invokeSkill, type ChildKernelRequest, type ChildKernelResult } from "../../../src/core/agent/skills/invoke";
-import { createInvocationState, type InvocationState, type SkillDefinition, type SkillTraceEntry } from "../../../src/core/agent/skills/types";
+import type { SkillLoader } from "../../../src/core/agent/skills/loader";
+import { createInvocationState, type InvocationState, type SkillDefinition, type SkillMeta, type SkillTraceEntry } from "../../../src/core/agent/skills/types";
 
 const skills: SkillDefinition[] = [
   { name: "song-arranger", description: "orchestrator", instructions: "top" },
   { name: "harmony-arranger", description: "harmony", instructions: "harmony" },
-  { name: "melody-arranger", description: "melody", instructions: "melody" },
-  { name: "bass-arranger", description: "bass", instructions: "bass" },
+  { name: "rhythm-arranger", description: "rhythm", instructions: "rhythm" },
 ];
 
+const skillMetas: SkillMeta[] = skills.map(({ name, description }) => ({ name, description }));
+
 const project = createMidiProject({ id: "p1", title: "Loop", ppq: 480, bpm: 100 });
+
+function makeLoader(): SkillLoader {
+  return {
+    list: async () => skillMetas,
+    load: async (name) => skills.find((skill) => skill.name === name),
+  };
+}
 
 function cannedRun(): (request: ChildKernelRequest) => Promise<ChildKernelResult> {
   return async () => ({
@@ -28,7 +37,8 @@ function cannedRun(): (request: ChildKernelRequest) => Promise<ChildKernelResult
 async function call(state: InvocationState, targetSkill: string, runKernel = cannedRun()) {
   const traces: SkillTraceEntry[] = [];
   return invokeSkill({
-    skills,
+    skillMetas,
+    loader: makeLoader(),
     project,
     targetSkill,
     task: "子任务",
@@ -60,21 +70,21 @@ describe("invokeSkill guards", () => {
     expect(result.error).toMatch(/cycle/);
   });
 
-  it("拒绝超过最大深度", async () => {
+  it("leaf（depth≥1）不得再调用其他 Skill", async () => {
     const state = createInvocationState();
-    state.parentSkill = "melody-arranger";
-    state.visited = ["song-arranger", "harmony-arranger", "melody-arranger"];
-    state.depth = 2;
-    const result = await call(state, "bass-arranger");
+    state.parentSkill = "harmony-arranger";
+    state.visited = ["song-arranger", "harmony-arranger"];
+    state.depth = 1;
+    const result = await call(state, "rhythm-arranger");
     expect(result.status).toBe("error");
-    expect(result.error).toMatch(/max-depth/);
+    expect(result.error).toMatch(/leaf-only/);
   });
 
   it("拒绝超过单父子调用上限", async () => {
     const state = createInvocationState();
     state.parentSkill = "song-arranger";
     state.visited = ["song-arranger"];
-    state.childCounts["song-arranger"] = 4;
+    state.childCounts["song-arranger"] = 2;
     const result = await call(state, "harmony-arranger");
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/max-children/);
@@ -84,7 +94,7 @@ describe("invokeSkill guards", () => {
     const state = createInvocationState();
     state.parentSkill = "song-arranger";
     state.visited = ["song-arranger"];
-    state.totalCalls = 8;
+    state.totalCalls = 4;
     const result = await call(state, "harmony-arranger");
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/max-total/);
@@ -107,7 +117,8 @@ describe("invokeSkill success path", () => {
     state.visited = ["song-arranger"];
     const traces: SkillTraceEntry[] = [];
     const result = await invokeSkill({
-      skills,
+      skillMetas,
+      loader: makeLoader(),
       project,
       targetSkill: "harmony-arranger",
       task: "修和声",
@@ -142,16 +153,16 @@ describe("invokeSkill success path", () => {
     const state = createInvocationState();
     state.parentSkill = "song-arranger";
     state.visited = ["song-arranger"];
-    const traces: SkillTraceEntry[] = [];
     const result = await invokeSkill({
-      skills,
+      skillMetas,
+      loader: makeLoader(),
       project,
       targetSkill: "harmony-arranger",
       task: "修和声",
       state,
       parent: { requestId: "r1", mode: "goal" },
       runKernel: cannedRun(),
-      recordTrace: (entry) => traces.push(entry),
+      recordTrace: () => undefined,
     });
     expect(result.status).toBe("ok");
     expect(result.depth).toBe(1);

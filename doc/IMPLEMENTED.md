@@ -48,16 +48,18 @@
 - 应用前在克隆工程上验证所有操作，任一失败则整个候选不提交；只允许应用 `goal` 模式生成且仍有效的候选；
   已应用/已忽略的候选不能重复应用；普通编辑、撤销、重做会清理过期候选状态。
 
-## 5. Skill 系统（嵌套调用）
+## 5. Skill 系统（一层委托，v3）
 
 - `@skill-name` 触发顶层 Skill；输入框 `@` 弹出 Skill 选择列表（↑/↓ 选择、Enter 确认、Esc 关闭）。
-- 运行时工具 `list_skills` / `load_skill` / `invoke_skill` 仅在 Skill 作用域注册；子 Skill 继承父模式递归运行，
-  返回结构化 `SkillInvocationResult`。
-- 防递归与预算：深度 ≤ 2、每父 ≤ 4、全局 ≤ 8；禁止 self 与环（visited 调用链检测）；子调用继承父 AbortSignal、可取消。
+- 运行时工具 `list_skills` / `load_skill` / `invoke_skill` 仅在 Skill 作用域注册；子 Skill（specialist）继承父模式递归运行，
+  返回结构化 `SkillInvocationResult`；depth ≥ 1 的子 Skill 是 leaf，不注册委托工具，不得再调用其他 Skill。
+- 发现与加载分离（progressive disclosure）：`SkillLoader`（core 接口 + 主进程实现）`list()` 只返回 name/description，
+  `load(name)` 按需读取完整 SKILL.md；同运行经 `withCachedLoader` 缓存，避免重复磁盘读取。
+- 预算：深度 ≤ 1、每父 ≤ 2、全局 ≤ 4；默认 0 次子调用，只有确需专业推理才委托；禁止 self 与环（visited 调用链检测）；子调用继承父 AbortSignal、可取消。
 - 确定性合并引擎 `mergeSkillOperations`：先到先得、绝不 last-wins；冲突时保留先到者并告警；
   合并候选重新过 `validateChangeSet`。
-- 7 份内置 SKILL.md：`song-arranger`（顶层编排）、`harmony-arranger`、`melody-arranger`、
-  `rhythm-arranger`、`bass-arranger`、`orchestration-arranger`、`humanize-performance`。
+- 4 份内置 SKILL.md：`song-arranger`（顶层编排，内含 melody/bass/orchestration 职责）、
+  `harmony-arranger`、`rhythm-arranger`、`humanize-performance`。
 - 用户自定义：在 Skill 目录（开发态仓库根 `skills/`，打包态 `resources/skills`）新建 `<name>/SKILL.md`
   （YAML frontmatter name/description + 正文）即生效，应用每次运行现读，可与内置 Skill 互委托。
 - 可观测性：`AgentResponsePayload.skillTrace` 返回每次子调用记录，界面可折叠展示；`console.debug` 输出调用日志。

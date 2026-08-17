@@ -23,7 +23,7 @@ import { checkAndSaveConfiguredShell, getConfiguredShellSettings } from "./shell
 import { registerSubscriptionIpc } from "./subscription-ipc.js";
 import { registerUsageIpc } from "./usage-ipc.js";
 import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
-import { loadAvailableSkills } from "./skill-loader.js";
+import { listSkillMeta } from "./skill-loader.js";
 import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
 import { APP_MENU_GROUPS, type AppMenuItem } from "../shared/menu.js";
 import type { ProjectOpenIntent } from "../shared/bridge.js";
@@ -324,8 +324,7 @@ ipcMain.handle("window:close", (event) => {
 });
 
 ipcMain.handle("agent:list-skills", async () => {
-  const skills = await loadAvailableSkills();
-  return skills.map((skill) => ({ name: skill.name, description: skill.description }));
+  return listSkillMeta();
 });
 
 registerSubscriptionIpc();

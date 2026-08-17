@@ -1,12 +1,14 @@
 import type { MidiProject, ProposedChangeSet } from "../../../shared/midi.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { PiThinkingLevel } from "../../../shared/conversation-settings.js";
-import { getSkill, skillAvailabilityReason } from "./registry.js";
+import { skillAvailabilityReason } from "./registry.js";
+import type { SkillLoader } from "./loader.js";
 import type {
   InvocationState,
   SkillContext,
   SkillDefinition,
   SkillInvocationResult,
+  SkillMeta,
   SkillTraceEntry,
 } from "./types.js";
 import type { PiCustomProviderConfig } from "../pi-kernel.js";
@@ -23,7 +25,8 @@ export interface ChildKernelRequest {
   customProvider?: PiCustomProviderConfig;
   modelId?: string;
   thinkingLevel?: PiThinkingLevel;
-  skills?: SkillDefinition[];
+  /** 发现层：全部 Skill 的 name/description。 */
+  skillMetas?: SkillMeta[];
   skill?: {
     name: string;
     instructions: string;
@@ -43,7 +46,10 @@ export interface ChildKernelResult {
 export type ChildRunKernel = (request: ChildKernelRequest) => Promise<ChildKernelResult>;
 
 export interface InvokeSkillOptions {
-  skills: SkillDefinition[];
+  /** 发现层元信息（name/description），用于守卫与 availability。 */
+  skillMetas: SkillMeta[];
+  /** 按需加载单个 Skill 完整定义（progressive disclosure）。 */
+  loader: SkillLoader;
   project: MidiProject;
   targetSkill: string;
   task: string;
@@ -68,8 +74,8 @@ export interface InvokeSkillOptions {
 }
 
 /**
- * 调用一个子 Skill：守卫（self / 环 / 深度 / 子调用上限 / 全局预算 / abort）→
- * 以父 mode 递归运行子内核（SKILL.md 注入 + 紧凑上下文）→ 收拢为结构化结果。
+ * 调用一个子 Skill：守卫（self / 环 / 深度 / 子调用上限 / leaf / abort）→
+ * 按需加载 SKILL.md → 以父 mode 递归运行子内核（紧凑上下文）→ 收拢为结构化结果。
  * 子 Skill 失败不会抛出：以 status "error" 返回，由父 Skill 决定 fallback。
  */
 export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInvocationResult> {
@@ -92,7 +98,12 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     error: message,
   });
 
-  const reason = skillAvailabilityReason(options.skills, targetSkill, {
+  // leaf 守卫：depth ≥ 1 的子 Skill 不得再调用其他 Skill（v3 一层委托）。
+  if (state.depth >= 1) {
+    return finishTrace(options, startedAt, failure(`无法调用 ${targetSkill}：leaf-only`));
+  }
+
+  const reason = skillAvailabilityReason(options.skillMetas, targetSkill, {
     parentSkill: state.parentSkill,
     visited: state.visited,
     depth: state.depth,
@@ -107,7 +118,8 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
   state.childCounts[parentKey] = parentChildren + 1;
   state.totalCalls += 1;
 
-  const skill = getSkill(options.skills, targetSkill);
+  // 按需加载目标 Skill 完整定义。
+  const skill: SkillDefinition | undefined = await options.loader.load(targetSkill);
   if (!skill) return finishTrace(options, startedAt, failure(`未找到 Skill：${targetSkill}`));
 
   const childRequest: ChildKernelRequest = {
@@ -121,7 +133,7 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     customProvider: options.parent.customProvider,
     modelId: options.parent.modelId,
     thinkingLevel: options.parent.thinkingLevel,
-    skills: options.skills,
+    skillMetas: options.skillMetas,
     skill: {
       name: targetSkill,
       instructions: skill.instructions,

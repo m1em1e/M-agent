@@ -1,4 +1,4 @@
-import type { SkillDefinition } from "./types.js";
+import type { SkillMeta } from "./types.js";
 
 export interface SkillAvailability {
   name: string;
@@ -7,21 +7,21 @@ export interface SkillAvailability {
   available: boolean;
 }
 
-export function listSkills(skills: SkillDefinition[]): Array<{ name: string; description: string }> {
+export function listSkills(skills: SkillMeta[]): Array<{ name: string; description: string }> {
   return skills.map((skill) => ({ name: skill.name, description: skill.description }));
 }
 
-export function getSkill(skills: SkillDefinition[], name: string): SkillDefinition | undefined {
-  return skills.find((skill) => skill.name === name);
+export function hasSkill(skills: SkillMeta[], name: string): boolean {
+  return skills.some((skill) => skill.name === name);
 }
 
 /** 解析目标是否在当前状态（self/环/深度/上限）下可调用；返回不可用原因。 */
 export function skillAvailabilityReason(
-  skills: SkillDefinition[],
+  skills: SkillMeta[],
   name: string,
   current: { parentSkill?: string; visited: string[]; depth: number; maxDepth: number; parentChildren: number; maxChildrenPerParent: number; totalCalls: number; maxTotal: number },
 ): string | null {
-  if (!getSkill(skills, name)) return "unknown-skill";
+  if (!hasSkill(skills, name)) return "unknown-skill";
   if (name === current.parentSkill) return "self-invocation";
   if (current.visited.includes(name)) return "cycle";
   if (current.depth >= current.maxDepth) return "max-depth";
@@ -31,7 +31,7 @@ export function skillAvailabilityReason(
 }
 
 export function listSkillAvailability(
-  skills: SkillDefinition[],
+  skills: SkillMeta[],
   current: { parentSkill?: string; visited: string[]; depth: number; maxDepth: number; parentChildren: number; maxChildrenPerParent: number; totalCalls: number; maxTotal: number },
 ): SkillAvailability[] {
   return skills.map((skill) => ({

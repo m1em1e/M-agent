@@ -2,14 +2,21 @@ import { describe, expect, it } from "vitest";
 import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createMidiProject, createMidiTrack } from "../../src/core/midi";
 import { runPiKernel } from "../../src/core/agent/pi-kernel";
+import type { SkillLoader } from "../../src/core/agent/skills/loader";
 import type { SkillDefinition } from "../../src/core/agent/skills/types";
 
 const skills: SkillDefinition[] = [
   { name: "song-arranger", description: "顶层编排", instructions: "song instructions" },
   { name: "harmony-arranger", description: "和声", instructions: "harmony instructions" },
   { name: "rhythm-arranger", description: "节奏", instructions: "rhythm instructions" },
-  { name: "bass-arranger", description: "低音", instructions: "bass instructions" },
 ];
+
+const skillMetas = skills.map(({ name, description }) => ({ name, description }));
+
+const skillLoader: SkillLoader = {
+  list: async () => skillMetas,
+  load: async (name) => skills.find((skill) => skill.name === name),
+};
 
 function project() {
   const value = createMidiProject({ id: "p1", title: "JRPG Battle", ppq: 480, bpm: 140 });
@@ -44,7 +51,8 @@ describe("Skill 嵌套调用集成（真实 tool loop + 递归内核）", () => 
       mode: "goal",
       objective: "把这段改成 JRPG 战斗音乐",
       project: project(),
-      skills,
+      skills: skillMetas,
+      skillLoader,
       skill: { name: "song-arranger", instructions: skills[0].instructions, depth: 0 },
       offlineScript: (faux) => faux.setResponses([
         fauxAssistantMessage(
@@ -86,7 +94,8 @@ describe("Skill 嵌套调用集成（真实 tool loop + 递归内核）", () => 
       mode: "goal",
       objective: "编曲",
       project: project(),
-      skills,
+      skills: skillMetas,
+      skillLoader,
       skill: { name: "song-arranger", instructions: skills[0].instructions, depth: 0 },
       offlineScript: (faux) => faux.setResponses([
         fauxAssistantMessage(

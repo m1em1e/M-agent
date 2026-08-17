@@ -3,7 +3,8 @@ import { mkdir, readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isValidSkillDefinition, parseSkillMarkdown } from "../core/agent/skills/parse.js";
-import type { SkillDefinition } from "../core/agent/skills/types.js";
+import type { SkillLoader } from "../core/agent/skills/loader.js";
+import type { SkillDefinition, SkillMeta } from "../core/agent/skills/types.js";
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
@@ -26,7 +27,59 @@ export async function ensureSkillsDirectory(): Promise<string> {
   return dir;
 }
 
-/** 扫描目录下所有 <name>/SKILL.md，解析 frontmatter；无效/重复项跳过并警告。 */
+/** 只读解析单个 Skill 文件；缺失/无效返回 undefined。 */
+async function loadSkillFile(dir: string, name: string): Promise<SkillDefinition | undefined> {
+  let text: string;
+  try {
+    text = await readFile(join(dir, name, "SKILL.md"), "utf8");
+  } catch {
+    return undefined;
+  }
+  const parsed = parseSkillMarkdown(text);
+  if (!isValidSkillDefinition(parsed)) return undefined;
+  return parsed;
+}
+
+/** 发现层：列出所有 Skill 的 name/description（不含 instructions，progressive disclosure）。 */
+export async function listSkillMeta(dir = getSkillsDirectory()): Promise<SkillMeta[]> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const metas: SkillMeta[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skill = await loadSkillFile(dir, entry.name);
+    if (!skill) continue;
+    if (metas.some((meta) => meta.name === skill.name)) continue;
+    metas.push({ name: skill.name, description: skill.description });
+  }
+  return metas;
+}
+
+/** 按需加载单个 Skill 的完整定义（含 instructions）。 */
+export async function loadSkillInstructions(name: string, dir = getSkillsDirectory()): Promise<SkillDefinition | undefined> {
+  return loadSkillFile(dir, name);
+}
+
+/** 主进程 SkillLoader 实现（含同运行内存缓存）。 */
+export function createSkillLoader(): SkillLoader {
+  const dir = getSkillsDirectory();
+  const cache = new Map<string, SkillDefinition | undefined>();
+  return {
+    list: () => listSkillMeta(dir),
+    load: async (name) => {
+      if (cache.has(name)) return cache.get(name);
+      const skill = await loadSkillInstructions(name, dir);
+      cache.set(name, skill);
+      return skill;
+    },
+  };
+}
+
+/** 兼容旧调用：加载目录下全部完整 Skill（已弃用，仅保留测试用；正式路径用 createSkillLoader）。 */
 export async function loadSkillsFromDirectory(dir: string): Promise<SkillDefinition[]> {
   let entries;
   try {
@@ -37,27 +90,10 @@ export async function loadSkillsFromDirectory(dir: string): Promise<SkillDefinit
   const skills: SkillDefinition[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    let text: string;
-    try {
-      text = await readFile(join(dir, entry.name, "SKILL.md"), "utf8");
-    } catch {
-      continue;
-    }
-    const parsed = parseSkillMarkdown(text);
-    if (!isValidSkillDefinition(parsed)) {
-      console.warn(`[skills] 跳过无效 Skill：${entry.name}`);
-      continue;
-    }
-    if (skills.some((skill) => skill.name === parsed.name)) {
-      console.warn(`[skills] 跳过重复 Skill：${parsed.name}`);
-      continue;
-    }
-    skills.push(parsed);
+    const skill = await loadSkillFile(dir, entry.name);
+    if (!skill) continue;
+    if (skills.some((existing) => existing.name === skill.name)) continue;
+    skills.push(skill);
   }
   return skills;
-}
-
-/** 当前生效的 Skill 列表（目录缺失返回空数组）。 */
-export async function loadAvailableSkills(): Promise<SkillDefinition[]> {
-  return loadSkillsFromDirectory(getSkillsDirectory());
 }

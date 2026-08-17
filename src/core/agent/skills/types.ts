@@ -10,6 +10,12 @@ export interface SkillDefinition {
   instructions: string;
 }
 
+/** 发现层元信息：只含 name/description，不含 instructions（progressive disclosure）。 */
+export interface SkillMeta {
+  name: string;
+  description: string;
+}
+
 /** 传给子 Skill 的紧凑上下文，不包含完整工程。 */
 export interface SkillContext {
   goal?: string;
@@ -69,9 +75,12 @@ export interface InvocationState {
 }
 
 export const DEFAULT_INVOCATION_LIMITS = {
-  maxDepth: 2,
-  maxChildrenPerParent: 4,
-  maxTotal: 8,
+  /** 委托深度：顶层 0，child 为 1，禁止更深（child 是 leaf）。 */
+  maxDepth: 1,
+  /** 每个父 Skill 最多 2 个子调用。 */
+  maxChildrenPerParent: 2,
+  /** 单次顶层运行子调用总量兜底。 */
+  maxTotal: 4,
 } as const;
 
 export function createInvocationState(signal?: AbortSignal): InvocationState {

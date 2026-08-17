@@ -32,13 +32,15 @@ import { parseProposedChangeSet } from "./schema.js";
 import { AGENT_CONTEXT_PROMPT } from "./context-prompt.js";
 import { invokeSkill, type ChildRunKernel } from "./skills/invoke.js";
 import { mergeSkillOperations, type SkillOperationSource } from "./skills/merge.js";
-import { getSkill, listSkillAvailability } from "./skills/registry.js";
+import { hasSkill, listSkillAvailability } from "./skills/registry.js";
+import type { SkillLoader } from "./skills/loader.js";
 import { createInvocationState, DEFAULT_INVOCATION_LIMITS } from "./skills/types.js";
 import type {
   InvocationState,
   SkillContext,
   SkillDefinition,
   SkillInvocationResult,
+  SkillMeta,
   SkillTraceEntry,
 } from "./skills/types.js";
 
@@ -70,8 +72,10 @@ export interface PiKernelRequest {
   focusTrackId?: string;
   /** 子 Skill 调用兜底超时（毫秒）。undefined 表示不限时。 */
   childTimeoutMs?: number;
-  /** 本次运行可用的 Skill 定义（由主进程加载）。 */
-  skills?: SkillDefinition[];
+  /** 本次运行可用的 Skill 元信息（name/description，progressive disclosure；instructions 经 skillLoader 按需加载）。 */
+  skills?: SkillMeta[];
+  /** 按需加载 Skill 完整定义（instructions）。 */
+  skillLoader?: SkillLoader;
   /** 系统音源库条目（用于 instrument_search）。工程级音源在 project.instruments 中。 */
   instruments?: InstrumentLibrarySummary[];
   /** 当前 Skill 作用域（顶层由 @skill 解析，子 Skill 由 invokeSkill 设置）。 */
@@ -247,8 +251,9 @@ function systemPrompt(mode: AgentMode, skill?: NonNullable<PiKernelRequest["skil
       "",
       "## Skill 委托规则",
       "- 使用 list_skills / load_skill / invoke_skill 进行发现与委托；工具 Schema 权威，不要发明 API。",
-      "- 子 Skill 只处理委托的子任务并返回结构化结果；不得直接修改工程，不得输出最终用户长答案。",
-      "- 禁止自我调用与循环；默认最大嵌套深度 2、每个父 Skill 最多 4 个子调用。",
+      "- 子 Skill（specialist）只处理委托的子任务并返回结构化结果；不得直接修改工程，不得输出最终用户长答案。",
+      "- 禁止自我调用与循环；最大委托深度 1，每个父 Skill 最多 2 个子调用；子 Skill 是 leaf，不得再调用其他 Skill。",
+      "- 默认 0 次子调用，只有确需专业推理时才委托；melody/bass/orchestration 由当前 Skill 内部处理，不单独调用。",
       "- 汇总所有子结果后，通过 propose_midi_changes 提交统一候选；冲突由合并引擎裁决，不要自行覆盖。",
     );
   }
@@ -300,7 +305,8 @@ function createTools(
   request: PiKernelRequest,
   candidates: ProposedChangeSet[],
   skillRuntime: {
-    skills: SkillDefinition[];
+    skillMetas: SkillMeta[];
+    skillLoader: SkillLoader;
     state: InvocationState;
     skillResults: SkillInvocationResult[];
     skillTrace: SkillTraceEntry[];
@@ -447,8 +453,10 @@ function createTools(
     ? [inspect, analyze, instrumentSearch]
     : [inspect, analyze, propose, instrumentSearch, setTrackInstrument];
   if (!request.skill) return base;
+  // leaf：depth ≥ 1 的子 Skill 不得再调用其他 Skill（v3 一层委托），不注册委托工具。
+  if (request.skill.depth >= 1) return base;
 
-  const { skills, state, skillResults, skillTrace } = skillRuntime;
+  const { skillMetas, skillLoader, state, skillResults, skillTrace } = skillRuntime;
   const parentKey = state.parentSkill ?? "__root__";
   const parentChildren = state.childCounts[parentKey] ?? 0;
   const availabilityCurrent = {
@@ -504,7 +512,7 @@ function createTools(
     description: "List available Skills with their canonical name, description, and whether they can be invoked right now.",
     parameters: inspectParameters,
     execute: async () => ({
-      content: [{ type: "text", text: JSON.stringify(listSkillAvailability(skills, availabilityCurrent)) }],
+      content: [{ type: "text", text: JSON.stringify(listSkillAvailability(skillMetas, availabilityCurrent)) }],
       details: { readOnly: true },
     }),
   };
@@ -515,7 +523,7 @@ function createTools(
     description: "Load the full SKILL.md instructions of a specific Skill by canonical name.",
     parameters: loadSkillParameters,
     execute: async (_id, params) => {
-      const skill = getSkill(skills, params.skillName);
+      const skill = await skillLoader.load(params.skillName);
       if (!skill) throw new Error(`未找到 Skill：${params.skillName}`);
       return { content: [{ type: "text", text: skill.instructions }], details: { skill: skill.name } };
     },
@@ -528,7 +536,8 @@ function createTools(
     executionMode: "sequential",
     execute: async (_id, params) => {
       const result = await invokeSkill({
-        skills,
+        skillMetas,
+        loader: skillLoader,
         project: request.project,
         targetSkill: params.skillName,
         task: params.task,
@@ -675,9 +684,11 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   const events: PiKernelEvent[] = [];
   const skillResults: SkillInvocationResult[] = [];
   const skillTrace: SkillTraceEntry[] = [];
-  const skills = request.skills ?? [];
+  const skillMetas = request.skills ?? [];
+  const skillLoader = request.skillLoader ?? { list: async () => [], load: async () => undefined };
   const skillRuntime = {
-    skills,
+    skillMetas,
+    skillLoader,
     state: request.skill
       ? {
           depth: request.skill.depth,
