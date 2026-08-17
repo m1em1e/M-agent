@@ -809,7 +809,9 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .markdown-body s { color: #7d8480; }
 .thinking-process { margin-bottom: 6px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--surface-input) 78%, transparent); color: var(--muted); }
 .thinking-process summary { cursor: pointer; font: 600 8px var(--mono); color: var(--purple); }
+.thinking-process summary .thinking-time { color: var(--muted); font-weight: 400; }
 .thinking-process p { margin: 7px 0 0; padding-top: 7px; border-top: 1px solid var(--line); color: var(--muted); font-size: 8px; line-height: 1.55; white-space: pre-wrap; }
+.thinking-total { margin: 0 0 8px; font: 400 8px var(--mono); color: var(--muted); }
 .thinking { margin: 8px 0 15px 36px; display: flex; align-items: center; gap: 4px; color: #626865; font-size: 8px; }
 .thinking span { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite alternate; }
 .agent-live {

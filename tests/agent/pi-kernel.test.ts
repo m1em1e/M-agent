@@ -52,7 +52,8 @@ describe("Pi agent kernel", () => {
     expect(result.candidates).toEqual([]);
     expect(result.analysis).toContain("未产生任何修改");
     expect(result.thinking).toHaveLength(1);
-    expect(result.thinking[0]).toContain("只读边界");
+    expect(result.thinking[0].text).toContain("只读边界");
+    expect(result.thinking[0].durationMs).toBeGreaterThanOrEqual(0);
     expect(result.effectiveThinkingLevel).toBe("medium");
   });
 

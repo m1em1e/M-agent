@@ -22,7 +22,7 @@ import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generati
 import type { AgentMode } from "../../shared/midi.js";
 import type { MidiProject, ProposedChangeSet } from "../../shared/midi.js";
 import type { InstrumentLibrarySummary } from "../../shared/instrument.js";
-import type { AgentLiveUpdate } from "../../shared/bridge.js";
+import type { AgentLiveUpdate, ThinkingSegment } from "../../shared/bridge.js";
 import type { PiThinkingLevel } from "../../shared/conversation-settings.js";
 import type { SubscriptionApiType, SubscriptionModel } from "../../shared/subscriptions.js";
 import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
@@ -110,7 +110,7 @@ export interface PiKernelResult {
   provider: "pi-openai" | "pi-openai-codex" | "pi-custom" | "pi-offline";
   events: PiKernelEvent[];
   turns: number;
-  thinking: string[];
+  thinking: ThinkingSegment[];
   effectiveThinkingLevel: PiThinkingLevel;
   modelId: string;
   inputTokens: number;
@@ -684,6 +684,15 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   const events: PiKernelEvent[] = [];
   const skillResults: SkillInvocationResult[] = [];
   const skillTrace: SkillTraceEntry[] = [];
+  // 思考段计时：基于 pi-ai 的 thinking_start/thinking_end 边界，按 contentIndex 分组。
+  const thinkingSegments: ThinkingSegment[] = [];
+  let currentThinking: { contentIndex: number; text: string; startedAt: number } | null = null;
+  const flushThinkingSegment = () => {
+    if (currentThinking) {
+      thinkingSegments.push({ text: currentThinking.text.trim(), durationMs: Date.now() - currentThinking.startedAt });
+      currentThinking = null;
+    }
+  };
   const skillMetas = request.skills ?? [];
   const skillLoader = request.skillLoader ?? { list: async () => [], load: async () => undefined };
   const skillRuntime = {
@@ -785,9 +794,22 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     const thinkingDelta = thinkingFromEvent(event);
     if (events.length >= 2_000) return;
     if (delta) events.push({ type: "text_delta", name: "assistant", text: delta });
+    else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_start") {
+      // 新思考段开始：重置计时，收拢上一段。
+      flushThinkingSegment();
+      currentThinking = { contentIndex: event.assistantMessageEvent.contentIndex, text: "", startedAt: Date.now() };
+    }
     else if (thinkingDelta) {
+      if (currentThinking && event.type === "message_update") {
+        currentThinking.text += thinkingDelta;
+      }
       request.onLive?.({ kind: "thinking", text: thinkingDelta });
       events.push({ type: "thinking_delta", name: "assistant", text: thinkingDelta });
+    }
+    else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_end") {
+      if (currentThinking && currentThinking.contentIndex === event.assistantMessageEvent.contentIndex) {
+        flushThinkingSegment();
+      }
     }
     else if (event.type === "tool_execution_start") {
       request.onLive?.({ kind: "tool_start", name: event.toolName });
@@ -874,13 +896,17 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
       }
     }
   }
+  // 收拢最后一段未结束的思考（provider 可能不发送 thinking_end 就停止）。
+  flushThinkingSegment();
   return {
     analysis: collectAssistantText(agent) || "Pi Agent 已完成运行。",
     candidates: request.mode === "research" ? [] : candidates,
     provider: runtime.provider,
     events,
     turns,
-    thinking: collectAssistantThinking(agent),
+    thinking: thinkingSegments.length > 0
+      ? thinkingSegments
+      : collectAssistantThinking(agent).map((text) => ({ text })),
     effectiveThinkingLevel,
     modelId: runtime.model.id,
     inputTokens,

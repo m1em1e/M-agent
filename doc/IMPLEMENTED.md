@@ -36,6 +36,9 @@
 - 三模式权限继承贯穿 Agent、Skill 子调用与候选应用（只读调研、计划预览、目标确认）。
 - Agent 实时状态（2026-08-16）：`onAgentLive` 把工具开始/结束、轮次、Skill 调用实时推送到 Agent 面板状态条；
   思考增量流式写入对话，每段完成后自动收起（`agent-live` + 折叠 `<details>`）。
+- 思考时间展示（2026-08-17）：主进程基于 pi-ai 的 `thinking_start`/`thinking_end` 边界逐段计时，
+  `AgentResponsePayload.thinking` 变为 `ThinkingSegment[]`（text + durationMs）；对话中每段思考折叠项显示耗时，
+  流式思考段实时显示已用时长，消息底部汇总总思考时长。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

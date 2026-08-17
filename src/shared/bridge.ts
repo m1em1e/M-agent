@@ -92,7 +92,8 @@ export interface AgentResponsePayload {
   kernel: "pi";
   provider: "pi-openai" | "pi-openai-codex" | "pi-custom" | "pi-offline";
   turns: number;
-  thinking: string[];
+  /** 完成的思考段（含每段耗时）。 */
+  thinking: ThinkingSegment[];
   effectiveThinkingLevel: PiThinkingLevel;
   modelId: string;
   inputTokens: number;
@@ -156,6 +157,12 @@ export interface EnvironmentIssue {
   message: string;
   instruction: string;
   action: "open-provider-settings" | "open-shell-settings" | "repair-app";
+}
+
+/** 一段已完成的思考内容及其耗时（毫秒）。provider 未提供 start/end 事件时 durationMs 为空。 */
+export interface ThinkingSegment {
+  text: string;
+  durationMs?: number;
 }
 
 export interface StartupEnvironmentReport {

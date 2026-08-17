@@ -17,6 +17,7 @@ import type {
   RendererProjectPayload,
   SaveResult,
   StartupEnvironmentReport,
+  ThinkingSegment,
   UsagePage,
   UsageSummary,
 } from "../shared/bridge";
@@ -139,9 +140,11 @@ interface ChatMessage {
   id: string;
   author: "agent" | "user";
   text: string;
-  thinking?: string[];
+  thinking?: ThinkingSegment[];
   /** 正在流式写入的思考片段（未完成的段，展开显示）。 */
   streamingThinking?: string;
+  /** 流式思考段开始时刻（毫秒时间戳），用于实时显示该段已用时长。 */
+  streamingThinkingStartedAt?: number;
   skillTrace?: SkillTraceEntry[];
 }
 
@@ -816,6 +819,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   // 实时思考流相关
   const runMessageIdRef = useRef<string>("");
   const liveThinkingRef = useRef("");
+  const liveThinkingStartedAtRef = useRef(0);
   const liveThinkingUiTimerRef = useRef<number | null>(null);
   const liveThinkingFlushTimerRef = useRef<number | null>(null);
 
@@ -1833,6 +1837,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       setCandidates([]);
     } finally {
       liveThinkingRef.current = "";
+      liveThinkingStartedAtRef.current = 0;
       if (liveThinkingUiTimerRef.current != null) window.clearTimeout(liveThinkingUiTimerRef.current);
       if (liveThinkingFlushTimerRef.current != null) window.clearTimeout(liveThinkingFlushTimerRef.current);
       liveThinkingUiTimerRef.current = null;
@@ -2107,7 +2112,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         const text = liveThinkingRef.current;
         if (!text) return;
         setMessages((items) => items.map((message) => message.id === runMessageIdRef.current
-          ? { ...message, streamingThinking: text }
+          ? { ...message, streamingThinking: text, streamingThinkingStartedAt: liveThinkingStartedAtRef.current || undefined }
           : message));
       }, 120);
     };
@@ -2116,11 +2121,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       liveThinkingFlushTimerRef.current = window.setTimeout(() => {
         liveThinkingFlushTimerRef.current = null;
         const text = liveThinkingRef.current;
+        const startedAt = liveThinkingStartedAtRef.current;
         liveThinkingRef.current = "";
+        liveThinkingStartedAtRef.current = 0;
         if (!text) return;
-        // 一段思考完成：追加为已收起条目，清除流式占位。
+        // 一段思考完成：追加为已收起条目（附该段耗时），清除流式占位。
         setMessages((items) => items.map((message) => message.id === runMessageIdRef.current
-          ? { ...message, thinking: [...(message.thinking ?? []), text], streamingThinking: "" }
+          ? { ...message, thinking: [...(message.thinking ?? []), { text, durationMs: startedAt ? Date.now() - startedAt : undefined }], streamingThinking: "", streamingThinkingStartedAt: undefined }
           : message));
       }, 800);
     };
@@ -2130,6 +2137,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         return;
       }
       if (update.kind === "thinking") {
+        if (!liveThinkingRef.current) liveThinkingStartedAtRef.current = Date.now();
         liveThinkingRef.current += update.text;
         scheduleThinkingUi();
         scheduleThinkingFlush();
@@ -2160,6 +2168,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       if (liveThinkingFlushTimerRef.current != null) window.clearTimeout(liveThinkingFlushTimerRef.current);
       liveThinkingUiTimerRef.current = null;
       liveThinkingFlushTimerRef.current = null;
+      liveThinkingStartedAtRef.current = 0;
     };
   }, [magent]);
 
@@ -2530,6 +2539,17 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const seconds = Math.floor(tick * 60 / (projectPpq * tempo));
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   };
+
+  /** 毫秒 → 人类可读时长（用于思考耗时展示）。 */
+  const formatThinkingTime = (ms: number) => {
+    if (!Number.isFinite(ms) || ms <= 0) return "";
+    if (ms < 1_000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1_000).toFixed(1)}s`;
+  };
+
+  /** 所有思考段耗时的总和（无耗时信息的段不参与）。 */
+  const thinkingTotalMs = (thinking?: ThinkingSegment[]) =>
+    (thinking ?? []).reduce((sum, segment) => sum + (segment.durationMs ?? 0), 0);
 
   const environmentMessages = environmentError
     ? [{ id: "environment-report", message: environmentError, instruction: "请重新检测；若问题持续，请重新启动应用。", action: "repair-app" as const }]
@@ -2923,18 +2943,21 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                 <div className="message-content">
                   {conversationSettings.showThinking && (
                     <>
-                      {message.thinking && message.thinking.map((thinking, index) => (
+                      {message.thinking && message.thinking.map((segment, index) => (
                         <details key={`${message.id}-thinking-${index}`} className="thinking-process">
-                          <summary>思考 {index + 1}</summary>
-                          <p>{thinking}</p>
+                          <summary>思考 {index + 1}{segment.durationMs != null ? ` · ${formatThinkingTime(segment.durationMs)}` : ""}</summary>
+                          <p>{segment.text}</p>
                         </details>
                       ))}
                       {message.streamingThinking ? (
                         <details open className="thinking-process">
-                          <summary>思考中…</summary>
+                          <summary>思考中…{message.streamingThinkingStartedAt ? ` · ${formatThinkingTime(Date.now() - message.streamingThinkingStartedAt)}` : ""}</summary>
                           <p>{message.streamingThinking}</p>
                         </details>
                       ) : null}
+                      {thinkingTotalMs(message.thinking) > 0 && (
+                        <div className="thinking-total">思考总时长 {formatThinkingTime(thinkingTotalMs(message.thinking))}</div>
+                      )}
                     </>
                   )}
                   <div className="message-answer"><MarkdownContent text={message.text} /></div>
