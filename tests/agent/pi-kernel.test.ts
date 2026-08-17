@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { fauxAssistantMessage, fauxText, fauxToolCall } from "@earendil-works/pi-ai";
 import { createMidiProject, createMidiTrack } from "../../src/core/midi";
 import { PI_MODE_TOOLS, runPiKernel } from "../../src/core/agent/pi-kernel";
 
@@ -94,5 +95,59 @@ describe("Pi agent kernel", () => {
     expect(result.provider).toBe("pi-offline");
     expect(result.candidates).toEqual([]);
     expect(result.analysis.length).toBeGreaterThan(0);
+  });
+
+  it("coerces a stringified changeSet argument back into an object (prepareArguments)", async () => {
+    const input = project();
+    const stringifiedChangeSet = JSON.stringify({
+      id: "coerce-1",
+      summary: "字符串化候选",
+      operations: [{
+        type: "update_notes",
+        trackId: "melody",
+        changes: [{ noteId: "n1", velocity: 60 }],
+      }],
+      validation: [],
+      estimatedAffectedNotes: 1,
+    });
+    const result = await runPiKernel({
+      requestId: "coerce-1",
+      mode: "goal",
+      objective: "调整力度",
+      project: input,
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall("propose_midi_changes", { changeSet: stringifiedChangeSet })],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(fauxText("已提交候选。")),
+      ]),
+    });
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].id).toBe("coerce-1");
+    expect(result.candidates[0].operations[0].type).toBe("update_notes");
+  });
+
+  it("passes an invalid changeSet through for the validator to reject", async () => {
+    const input = project();
+    const result = await runPiKernel({
+      requestId: "coerce-2",
+      mode: "goal",
+      objective: "调整力度",
+      project: input,
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall("propose_midi_changes", { changeSet: "{ not-valid-json" })],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(fauxText("工具报错。")),
+      ]),
+    });
+    // 非法字符串原样透传：不产生候选；工具执行以错误结束。
+    expect(result.candidates).toHaveLength(0);
+    const failedTool = result.events.find(
+      (event) => event.type === "tool_end" && event.name === "propose_midi_changes" && event.isError,
+    );
+    expect(failedTool).toBeDefined();
   });
 });

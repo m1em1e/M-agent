@@ -12,6 +12,7 @@ import {
   type CredentialStore,
   type Model,
   type Provider,
+  type Static,
 } from "@earendil-works/pi-ai";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
@@ -159,6 +160,61 @@ const proposedChangeSetSchema = Type.Object({
   validation: Type.Array(Type.Any()),
   estimatedAffectedNotes: Type.Integer({ minimum: 0, maximum: 10_000 }),
 });
+
+/**
+ * 工具参数兼容垫片：部分模型（尤其经 openai-completions 兼容接口）会把嵌套对象参数
+ * 序列化成 JSON 字符串（双重编码）再传入。pi-ai 的 schema 校验不会把字符串还原回对象，
+ * 会直接报 "must be object" 导致工具调用失败。此函数在校验前把字符串化字段还原：
+ * - 整个 args 是字符串 → 先 JSON.parse
+ * - 字段值是 JSON 字符串（可解析为对象/数组）→ 递归解析
+ * 解析失败保持原样，让校验给出可读错误。
+ */
+function coerceToolArguments(args: unknown): Record<string, unknown> {
+  let parsed = args;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return { raw: args };
+    }
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { raw: args };
+  }
+  const result: Record<string, unknown> = { ...(parsed as Record<string, unknown>) };
+  for (const key of Object.keys(result)) {
+    result[key] = coerceJsonStringValue(result[key]);
+  }
+  return result;
+}
+
+/** 把「看起来是 JSON 的对象/数组字符串」解析回对象/数组；其余保持原值。 */
+function coerceJsonStringValue(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (trimmed === "") return value;
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return value;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed === null || typeof parsed !== "object") return value;
+    return parsed;
+  } catch {
+    return value;
+  }
+}
+
+/** 从工具执行结果中提取错误文本（result.content 首条 text），截断便于日志。 */
+function toolExecutionErrorText(result: unknown): string | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const content = (result as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const first = content.find(
+    (block) => block !== null && typeof block === "object" && (block as { type?: string }).type === "text",
+  );
+  const text = first ? (first as { text?: unknown }).text : undefined;
+  if (typeof text !== "string" || text.trim() === "") return undefined;
+  return text.length > 500 ? `${text.slice(0, 500)}…` : text;
+}
 
 /** 单次循环计算音高范围，避免展开参数在超大单轨上触发栈溢出。 */
 function pitchRange(notes: ReadonlyArray<{ pitch: number }>): [number, number] | null {
@@ -344,6 +400,8 @@ function createTools(
     description: "Submit a candidate MIDI edit transaction for validation and user preview. It does not apply edits.",
     parameters: proposeParameters,
     executionMode: "sequential",
+    // 兼容垫片：还原模型字符串化的 changeSet（见 coerceToolArguments）。
+    prepareArguments: (args) => coerceToolArguments(args) as Static<typeof proposeParameters>,
     execute: async (_id, params) => {
       const parsed = parseProposedChangeSet(params.changeSet);
       const validated = submitChangeSet(parsed);
@@ -755,6 +813,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     objective: request.objective,
     provider: runtime.provider,
     modelId: runtime.model.id,
+    apiType: request.customProvider?.apiType ?? null,
     thinkingLevel: effectiveThinkingLevel,
     maximumTurns,
     maximumOutputTokens,
@@ -845,7 +904,13 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
       events.push({ type: "tool_start", name: event.toolName });
     } else if (event.type === "tool_execution_end") {
       request.onLive?.({ kind: "tool_end", name: event.toolName, isError: event.isError });
-      log({ type: "kernel.tool_end", requestId: request.requestId, name: event.toolName, isError: event.isError });
+      log({
+        type: "kernel.tool_end",
+        requestId: request.requestId,
+        name: event.toolName,
+        isError: event.isError,
+        error: event.isError ? toolExecutionErrorText(event.result) : undefined,
+      });
       events.push({ type: "tool_end", name: event.toolName, isError: event.isError });
     } else events.push({ type: "lifecycle", name: event.type });
   });
