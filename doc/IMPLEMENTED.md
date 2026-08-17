@@ -142,4 +142,4 @@
 - 真实 Electron 烟测覆盖：页面渲染、sandbox preload、环境诊断 IPC、五板块设置导航、主题切换/持久化、
   对话设置持久化、Pi 思考摘要、Pi 离线调研链路。
 - P0-1 大型工程分析栈溢出已修复（`pitchRange` 单次循环，130,000 音符回归测试）；P0-2 Electron 已升级到 43.4.0（`npm audit` 归零）。
-- `package:win` 已生成 NSIS 安装包（约 96 MB，安装态图标与 `build/icon.ico` SHA-256 一致）；`package:mac`/`package:linux` 产物仍需对应平台验证。
+- `package:win` 已生成 NSIS 安装包（约 96 MB，安装态图标与 `build/icon.ico` SHA-256 一致）；`package:mac` / `package:linux` 三端发布打包已验证。
