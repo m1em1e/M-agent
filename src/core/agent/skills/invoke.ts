@@ -1,6 +1,7 @@
 import type { MidiProject, ProposedChangeSet } from "../../../shared/midi.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { PiThinkingLevel } from "../../../shared/conversation-settings.js";
+import type { AgentLogSink } from "../../../shared/agent-log.js";
 import { skillAvailabilityReason } from "./registry.js";
 import type { SkillLoader } from "./loader.js";
 import type {
@@ -35,6 +36,8 @@ export interface ChildKernelRequest {
     taskContext?: SkillContext;
     visited?: string[];
   };
+  /** Agent 调试日志接收器（子 Skill 运行透传）。 */
+  logger?: AgentLogSink;
   signal?: AbortSignal;
 }
 
@@ -70,6 +73,8 @@ export interface InvokeSkillOptions {
   runKernel: ChildRunKernel;
   /** 子 Skill 运行超时（毫秒）。留空表示不限时。 */
   childTimeoutMs?: number;
+  /** Agent 调试日志接收器（子 Skill 运行透传）。 */
+  logger?: AgentLogSink;
   recordTrace: (entry: SkillTraceEntry) => void;
 }
 
@@ -84,6 +89,7 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
   const parentKey = state.parentSkill ?? "__root__";
   const parentChildren = state.childCounts[parentKey] ?? 0;
   const childDepth = state.depth + 1;
+  const log = (event: Parameters<NonNullable<InvokeSkillOptions["logger"]>>[0]) => options.logger?.(event);
 
   const failure = (message: string): SkillInvocationResult => ({
     skill: targetSkill,
@@ -122,6 +128,17 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
   const skill: SkillDefinition | undefined = await options.loader.load(targetSkill);
   if (!skill) return finishTrace(options, startedAt, failure(`未找到 Skill：${targetSkill}`));
 
+  log({
+    type: "skill.request",
+    requestId: options.parent.requestId,
+    parentSkill: state.parentSkill ?? null,
+    skill: targetSkill,
+    depth: childDepth,
+    task: options.task,
+    context: options.context ?? null,
+    constraints: options.constraints ?? null,
+  });
+
   const childRequest: ChildKernelRequest = {
     requestId: `${options.parent.requestId}-skill-${targetSkill}-${childDepth}`,
     mode: options.parent.mode,
@@ -146,6 +163,7 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     signal: options.childTimeoutMs !== undefined
       ? combineSignals(options.childTimeoutMs, options.parent.signal)
       : options.parent.signal,
+    logger: options.logger,
   };
 
   try {
@@ -181,15 +199,28 @@ function finishTrace(
   startedAt: number,
   result: SkillInvocationResult,
 ): SkillInvocationResult {
+  const durationMs = Date.now() - startedAt;
   options.recordTrace({
     parentSkill: options.state.parentSkill,
     childSkill: result.skill,
     depth: result.depth,
     startedAt,
-    durationMs: Date.now() - startedAt,
+    durationMs,
     status: result.status,
     operationCount: result.operations.length,
     affectedNoteCount: result.affectedNotes.length,
+  });
+  options.logger?.({
+    type: "skill.result",
+    requestId: options.parent.requestId,
+    parentSkill: options.state.parentSkill ?? null,
+    skill: result.skill,
+    depth: result.depth,
+    status: result.status,
+    durationMs,
+    operationCount: result.operations.length,
+    affectedNoteCount: result.affectedNotes.length,
+    error: result.error ?? null,
   });
   return result;
 }

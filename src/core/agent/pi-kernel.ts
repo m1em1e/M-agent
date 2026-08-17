@@ -23,6 +23,7 @@ import type { AgentMode } from "../../shared/midi.js";
 import type { MidiProject, ProposedChangeSet } from "../../shared/midi.js";
 import type { InstrumentLibrarySummary } from "../../shared/instrument.js";
 import type { AgentLiveUpdate, ThinkingSegment } from "../../shared/bridge.js";
+import type { AgentLogSink } from "../../shared/agent-log.js";
 import type { PiThinkingLevel } from "../../shared/conversation-settings.js";
 import type { SubscriptionApiType, SubscriptionModel } from "../../shared/subscriptions.js";
 import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
@@ -94,6 +95,8 @@ export interface PiKernelRequest {
   offlineScript?: (faux: ReturnType<typeof fauxProvider>) => void;
   /** 实时调用更新回调（工具调用/轮次/Skill 调用），供界面展示请求调用情况。 */
   onLive?: (update: AgentLiveUpdate) => void;
+  /** Agent 调试日志接收器（测试环境写入 log/*.log）；未设置时不记录。 */
+  logger?: AgentLogSink;
   signal?: AbortSignal;
 }
 
@@ -558,6 +561,7 @@ function createTools(
         runKernel,
         recordTrace,
         childTimeoutMs: request.childTimeoutMs,
+        logger: request.logger,
       });
       skillResults.push(result);
       return {
@@ -680,16 +684,24 @@ function createCustomRuntime(config: PiCustomProviderConfig, activeModelId: stri
 }
 
 export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelResult> {
+  const log = (event: Parameters<NonNullable<PiKernelRequest["logger"]>>[0]) => request.logger?.(event);
   const candidates: ProposedChangeSet[] = [];
   const events: PiKernelEvent[] = [];
   const skillResults: SkillInvocationResult[] = [];
   const skillTrace: SkillTraceEntry[] = [];
   // 思考段计时：基于 pi-ai 的 thinking_start/thinking_end 边界，按 contentIndex 分组。
   const thinkingSegments: ThinkingSegment[] = [];
+  let thinkingIndex = 0;
   let currentThinking: { contentIndex: number; text: string; startedAt: number } | null = null;
   const flushThinkingSegment = () => {
     if (currentThinking) {
-      thinkingSegments.push({ text: currentThinking.text.trim(), durationMs: Date.now() - currentThinking.startedAt });
+      const text = currentThinking.text.trim();
+      const durationMs = Date.now() - currentThinking.startedAt;
+      if (text) {
+        thinkingSegments.push({ text, durationMs });
+        log({ type: "kernel.thinking", requestId: request.requestId, index: thinkingIndex, durationMs, text });
+        thinkingIndex += 1;
+      }
       currentThinking = null;
     }
   };
@@ -736,6 +748,21 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   let cacheReadTokens = 0;
   let cacheWriteTokens = 0;
   let cost = 0;
+  log({
+    type: "kernel.request_start",
+    requestId: request.requestId,
+    mode: request.mode,
+    objective: request.objective,
+    provider: runtime.provider,
+    modelId: runtime.model.id,
+    thinkingLevel: effectiveThinkingLevel,
+    maximumTurns,
+    maximumOutputTokens,
+    skill: request.skill
+      ? { name: request.skill.name, parentSkill: request.skill.parentSkill ?? null, depth: request.skill.depth }
+      : null,
+    project: request.project,
+  });
   // 工具调用统计（用于中止/超时诊断：判断模型是否在循环调用工具而未收敛）。
   const toolCallCounts: Record<string, number> = {};
   const recentToolCalls: string[] = [];
@@ -765,6 +792,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     shouldStopAfterTurn: ({ message }) => {
       turns += 1;
       request.onLive?.({ kind: "turn", turns });
+      log({ type: "kernel.turn", requestId: request.requestId, turns });
       const usage = message.usage;
       if (usage) {
         inputTokens += usage.input;
@@ -813,9 +841,11 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     }
     else if (event.type === "tool_execution_start") {
       request.onLive?.({ kind: "tool_start", name: event.toolName });
+      log({ type: "kernel.tool_start", requestId: request.requestId, name: event.toolName });
       events.push({ type: "tool_start", name: event.toolName });
     } else if (event.type === "tool_execution_end") {
       request.onLive?.({ kind: "tool_end", name: event.toolName, isError: event.isError });
+      log({ type: "kernel.tool_end", requestId: request.requestId, name: event.toolName, isError: event.isError });
       events.push({ type: "tool_end", name: event.toolName, isError: event.isError });
     } else events.push({ type: "lifecycle", name: event.type });
   });
@@ -851,14 +881,22 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   } catch (error) {
     if (request.signal?.aborted) {
       console.warn(`[agent] 已中止，底层错误：${error instanceof Error ? error.message : String(error)}`);
+      log({ type: "kernel.abort", requestId: request.requestId, error: error instanceof Error ? error.message : String(error) });
       throw enrichAbortError();
     }
+    log({ type: "kernel.error", requestId: request.requestId, error: error instanceof Error ? error.message : String(error) });
     throw error;
   } finally {
     request.signal?.removeEventListener("abort", abortListener);
   }
-  if (request.signal?.aborted) throw enrichAbortError();
-  if (agent.state.errorMessage) throw new Error(agent.state.errorMessage);
+  if (request.signal?.aborted) {
+    log({ type: "kernel.abort", requestId: request.requestId, error: "aborted" });
+    throw enrichAbortError();
+  }
+  if (agent.state.errorMessage) {
+    log({ type: "kernel.error", requestId: request.requestId, error: agent.state.errorMessage });
+    throw new Error(agent.state.errorMessage);
+  }
   // 顶层 Skill 运行：合并全部子 Skill 结果（+ 父自身候选）为一个统一候选。
   if (request.skill && request.skill.depth === 0 && skillResults.length > 0) {
     const inputs: SkillOperationSource[] = skillResults.map((result) => ({
@@ -898,7 +936,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   }
   // 收拢最后一段未结束的思考（provider 可能不发送 thinking_end 就停止）。
   flushThinkingSegment();
-  return {
+  const result: PiKernelResult = {
     analysis: collectAssistantText(agent) || "Pi Agent 已完成运行。",
     candidates: request.mode === "research" ? [] : candidates,
     provider: runtime.provider,
@@ -916,6 +954,23 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     cost,
     skillTrace,
   };
+  log({
+    type: "kernel.result",
+    requestId: request.requestId,
+    analysis: result.analysis,
+    candidates: result.candidates,
+    thinking: result.thinking,
+    skillTrace: result.skillTrace,
+    turns: result.turns,
+    provider: result.provider,
+    modelId: result.modelId,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    cacheReadTokens: result.cacheReadTokens,
+    cacheWriteTokens: result.cacheWriteTokens,
+    cost: result.cost,
+  });
+  return result;
 }
 
 export { MODE_TOOLS as PI_MODE_TOOLS };

@@ -3,6 +3,7 @@ import { runPiKernel } from "../core/agent/pi-kernel.js";
 import type { AgentLiveUpdate, AgentRequestPayload, AgentResponsePayload } from "../shared/bridge.js";
 import type { SkillLoader } from "../core/agent/skills/loader.js";
 import { createSkillLoader } from "./skill-loader.js";
+import { createAgentLogSink } from "./agent-logger.js";
 import { listSystemInstruments } from "./audio/library-store.js";
 import {
   DEFAULT_CONVERSATION_SETTINGS,
@@ -31,6 +32,21 @@ export async function runAgent(
   const conversation = payload.conversation ?? DEFAULT_CONVERSATION_SETTINGS;
   const skillLoader = createSkillLoader();
   const skillMetas = await skillLoader.list();
+  const logger = createAgentLogSink();
+  const requestId = randomUUID();
+  logger({
+    type: "agent.request",
+    requestId,
+    mode: payload.mode,
+    objective: payload.objective,
+    focusTrackId: payload.focusTrackId ?? null,
+    provider: authentication?.provider ?? null,
+    modelId: authentication?.provider === "custom"
+      ? (authentication.customProvider.activeModelId ?? authentication.customProvider.models[0]?.id)
+      : authentication?.provider === "openai-codex" ? "gpt-5.4-mini" : authentication?.provider === "openai" ? "gpt-5-mini" : null,
+    conversation,
+    project: payload.project,
+  });
   let instruments: Awaited<ReturnType<typeof listSystemInstruments>> = [];
   try {
     instruments = await listSystemInstruments();
@@ -39,7 +55,7 @@ export async function runAgent(
   }
   const { objective, skill } = await resolveTopLevelSkill(payload.objective.trim(), skillLoader);
   const buildRequest = (): Parameters<typeof runPiKernel>[0] => ({
-    requestId: randomUUID(),
+    requestId,
     mode: payload.mode,
     objective,
     project: rendererPayloadToProject(payload.project),
@@ -65,6 +81,7 @@ export async function runAgent(
     skill,
     instruments,
     onLive,
+    logger,
     signal,
   });
   let result: Awaited<ReturnType<typeof runPiKernel>>;
@@ -74,11 +91,16 @@ export async function runAgent(
     // 超时/窗口关闭等中止：runPiKernel 已把原因 + 运行诊断抛回；直接透出，不再用原始流错误。
     if (signal?.aborted) {
       console.warn(`[agent] 请求已中止，上层错误：${error instanceof Error ? error.message : String(error)}`);
+      logger({ type: "agent.abort", requestId, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
     // 瞬时流/网络错误：失败且未产出任何候选时自动重试一次（无副作用，仅重复 token 成本）。
-    if (!isTransientAgentError(error)) throw error;
+    if (!isTransientAgentError(error)) {
+      logger({ type: "agent.error", requestId, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     console.warn(`[agent] 检测到瞬时流错误，重试一次：${error instanceof Error ? error.message : String(error)}`);
+    logger({ type: "agent.retry", requestId, error: error instanceof Error ? error.message : String(error) });
     result = await runPiKernel(buildRequest());
   }
   if (result.provider !== "pi-offline") {
@@ -95,7 +117,7 @@ export async function runAgent(
       cost: result.cost,
     });
   }
-  return {
+  const response: AgentResponsePayload = {
     analysis: result.analysis,
     candidates: result.candidates,
     kernel: "pi",
@@ -111,6 +133,8 @@ export async function runAgent(
     cost: result.cost,
     skillTrace: result.skillTrace,
   };
+  logger({ type: "agent.response", requestId, response });
+  return response;
 }
 
 /**
