@@ -190,8 +190,10 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
         if (!Array.isArray(value.track.notes)) {
           issues.push({ path: `${path}.track.notes`, message: "must be an array" });
         } else {
+          // 音符 id 可选：应用层 createMidiNote 会自动生成，避免模型为大量音符逐一编 id
+          // 而被迫缩小规模（此前强制要求 id 导致完整编排 payload 被拒）。
           value.track.notes.forEach((note, noteIndex) =>
-            validateNote(note, `${path}.track.notes[${noteIndex}]`, issues, true),
+            validateNote(note, `${path}.track.notes[${noteIndex}]`, issues),
           );
         }
       }

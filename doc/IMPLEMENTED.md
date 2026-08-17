@@ -43,6 +43,9 @@
   以 JSON-lines 写入仓库根 `log/log-yyyy-MM-dd HH-mm-ss.log`（非测试环境 no-op）；事件含 agent.request/response/abort/retry、
   kernel.request_start（含完整工程 dump）/thinking/turn/tool_start/tool_end/result/error、skill.request/result；
   子 Skill 内核经 `PiKernelRequest.logger` 透传一并记录；core 只依赖 `AgentLogSink` 回调接口，不触碰文件系统。
+- 模型工具参数兼容（2026-08-17）：`propose_midi_changes` 经 `prepareArguments` 兼容垫片还原字符串化 `changeSet`（
+  openai-completions 系模型常双重编码嵌套对象导致 "must be object"）；`create_track` 音符 `id` 改为可选（应用层自动生成），
+  避免模型为大量音符逐一编 id 而被迫缩小编排规模。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

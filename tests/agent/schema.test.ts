@@ -62,4 +62,24 @@ describe("proposed change-set schema", () => {
     ];
     expect(parseProposedChangeSet(input).operations).toHaveLength(2);
   });
+
+  it("accepts create_track notes without ids (app auto-generates them)", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: {
+        name: "Drums",
+        role: "drums",
+        channel: 9,
+        program: 0,
+        muted: false,
+        solo: false,
+        notes: [
+          { pitch: 36, startTick: 0, durationTicks: 240, velocity: 90 },
+          { pitch: 38, startTick: 480, durationTicks: 240, velocity: 85 },
+        ],
+      },
+    }];
+    expect(parseProposedChangeSet(input).operations).toHaveLength(1);
+  });
 });
