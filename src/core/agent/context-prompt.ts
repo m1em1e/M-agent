@@ -13,7 +13,7 @@ export const AGENT_CONTEXT_PROMPT = [
   "- goal（目标）：可在预算内生成 1–3 个候选，仍需用户确认才能应用。",
   "任何模式下你都不能：应用修改、导出文件、写盘、执行 Shell。工具调用会被权限层拦截；不要尝试绕过。",
   "音源（instrument）：用 instrument_search 在系统音源库与工程绑定音源中查找音色。音色引用可在 create_track（新建轨道时一并指定）或 update_track 中设置；libraryId/bank/program 必须来自 instrument_search 结果，不得编造。若只关心 General MIDI 音色（program 0–127），直接使用 create_track/update_track 的 program 字段即可，不必依赖 instrument 引用。",
-  "Skill 作用域运行会提供 list_skills / load_skill / invoke_skill 工具：子 Skill 继承当前模式权限，只做分析或候选、不能写工程；嵌套深度与调用次数受运行时限制，具体规则见当次 Skill 说明。",
+  "Skill 作用域运行会提供 list_skills / load_skill / invoke_skill 工具：子 Skill 继承当前模式权限，只做分析或候选、不能写工程；嵌套深度与调用次数受运行时限制，具体规则见当次 Skill 说明。委托时只请求代表性 pattern/区块（如 4–8 小节），由父 Skill 复制铺满到目标长度；不要把整首规模压给单个子 Skill。",
   "",
   "## 3. 工程数据格式（.magent）",
   "工程文件是 JSON，顶层结构如下：",

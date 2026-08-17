@@ -145,6 +145,10 @@ const MODE_TOOLS: Readonly<Record<AgentMode, ReadonlySet<PiToolName>>> = {
   goal: new Set(["inspect_midi_project", "analyze_midi_project", "propose_midi_changes", "instrument_search", "set_track_instrument", "list_skills", "load_skill", "invoke_skill"]),
 };
 const MAX_CANDIDATES = 3;
+/** 事件缓冲上限：超出后仅停止记录 events 数组，不阻断业务处理（思考段/工具/UI 进度）。 */
+const EVENT_BUFFER_LIMIT = 20_000;
+/** 子 Skill 默认兜底超时（毫秒）：用户未配置时防止单个子 Skill 无界拖长整个运行。 */
+const DEFAULT_CHILD_TIMEOUT_MS = 360_000;
 
 const operationSchema = Type.Object(
   {
@@ -313,6 +317,7 @@ function systemPrompt(mode: AgentMode, skill?: NonNullable<PiKernelRequest["skil
       "- 子 Skill（specialist）只处理委托的子任务并返回结构化结果；不得直接修改工程，不得输出最终用户长答案。",
       "- 禁止自我调用与循环；最大委托深度 1，每个父 Skill 最多 2 个子调用；子 Skill 是 leaf，不得再调用其他 Skill。",
       "- 默认 0 次子调用，只有确需专业推理时才委托；melody/bass/orchestration 由当前 Skill 内部处理，不单独调用。",
+      "- 委托时只请求代表性 pattern/区块（如 4–8 小节），由父 Skill 复制/铺满到目标长度；不要把整首或数百小节全量压给单个子 Skill，避免单轮巨大输出导致超时。",
       "- 汇总所有子结果后，通过 propose_midi_changes 提交统一候选；冲突由合并引擎裁决，不要自行覆盖。",
     );
   }
@@ -618,7 +623,7 @@ function createTools(
         },
         runKernel,
         recordTrace,
-        childTimeoutMs: request.childTimeoutMs,
+        childTimeoutMs: request.childTimeoutMs ?? DEFAULT_CHILD_TIMEOUT_MS,
         logger: request.logger,
       });
       skillResults.push(result);
@@ -879,8 +884,12 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   agent.subscribe((event) => {
     const delta = textFromEvent(event);
     const thinkingDelta = thinkingFromEvent(event);
-    if (events.length >= 2_000) return;
-    if (delta) events.push({ type: "text_delta", name: "assistant", text: delta });
+    // 事件缓冲满后仅停止记录 events 数组；思考段/工具/UI 进度的业务处理始终执行，
+    // 避免超长输出（大量 thinking_delta）导致 thinking_end/tool 事件被丢弃、进度中断。
+    const recordEvent = (entry: PiKernelEvent) => {
+      if (events.length < EVENT_BUFFER_LIMIT) events.push(entry);
+    };
+    if (delta) recordEvent({ type: "text_delta", name: "assistant", text: delta });
     else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_start") {
       // 新思考段开始：重置计时，收拢上一段。
       flushThinkingSegment();
@@ -891,7 +900,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
         currentThinking.text += thinkingDelta;
       }
       request.onLive?.({ kind: "thinking", text: thinkingDelta });
-      events.push({ type: "thinking_delta", name: "assistant", text: thinkingDelta });
+      recordEvent({ type: "thinking_delta", name: "assistant", text: thinkingDelta });
     }
     else if (event.type === "message_update" && event.assistantMessageEvent.type === "thinking_end") {
       if (currentThinking && currentThinking.contentIndex === event.assistantMessageEvent.contentIndex) {
@@ -901,7 +910,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     else if (event.type === "tool_execution_start") {
       request.onLive?.({ kind: "tool_start", name: event.toolName });
       log({ type: "kernel.tool_start", requestId: request.requestId, name: event.toolName });
-      events.push({ type: "tool_start", name: event.toolName });
+      recordEvent({ type: "tool_start", name: event.toolName });
     } else if (event.type === "tool_execution_end") {
       request.onLive?.({ kind: "tool_end", name: event.toolName, isError: event.isError });
       log({
@@ -911,8 +920,8 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
         isError: event.isError,
         error: event.isError ? toolExecutionErrorText(event.result) : undefined,
       });
-      events.push({ type: "tool_end", name: event.toolName, isError: event.isError });
-    } else events.push({ type: "lifecycle", name: event.type });
+      recordEvent({ type: "tool_end", name: event.toolName, isError: event.isError });
+    } else recordEvent({ type: "lifecycle", name: event.type });
   });
   const abortListener = () => agent.abort();
   const startedAt = Date.now();

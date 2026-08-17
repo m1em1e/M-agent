@@ -71,7 +71,7 @@ export interface InvokeSkillOptions {
     signal?: AbortSignal;
   };
   runKernel: ChildRunKernel;
-  /** 子 Skill 运行超时（毫秒）。留空表示不限时。 */
+  /** 子 Skill 运行超时（毫秒）。未设置时由调用方（pi-kernel）填入默认兜底值。 */
   childTimeoutMs?: number;
   /** Agent 调试日志接收器（子 Skill 运行透传）。 */
   logger?: AgentLogSink;

@@ -78,6 +78,15 @@ Use two specialists only for a genuinely mixed task where both materially affect
 
 Never invoke the same specialist twice.
 
+### Delegate pattern-first, not full-length
+
+When you delegate, ask the specialist to produce a **representative pattern or block** (e.g. 4–8 bars, or one loop unit), not the whole song or a full 48-bar arrangement. Keep each child task small enough to finish quickly.
+
+- In `invoke_skill`, state the pattern length explicitly: "generate a 4-bar X pattern with ... I will replicate it to the target length".
+- You are responsible for **replicating/stretching** the returned pattern to the target length (e.g. repeat the pattern via `insert_notes`, or loop it by setting `set_loop`).
+- Never ask a specialist for hundreds of bars of note data in one call; that forces huge single-turn output, slow convergence, and timeouts.
+- Only ask for more than a short pattern when the region is genuinely small or the task is inherently one-shot (e.g. a single chord chart).
+
 ## Fast workflow
 
 1. Inspect only the relevant project region.

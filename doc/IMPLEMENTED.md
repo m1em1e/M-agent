@@ -49,6 +49,10 @@
 - 建轨提示修正（2026-08-17）：context-prompt 明确 create_track 可自定 `track.id`（供同候选内引用）与内联音符、
   可设 `instrument`；删除「instrument 只读不能修改」的误导，音色改用 create_track/update_track 设置。
   此前模型被误导后陷入「建轨→设音色→trackId 未知」死循环，提交了空轨道+set_loop、0 音符。
+- 长任务稳定性（2026-08-17）：事件缓冲上限提至 20,000，且缓冲满后仅停止记录 events 数组、不阻断业务处理
+  （思考段落盘/工具事件/UI 进度始终执行），避免超长 thinking 流导致进度中断；子 Skill 默认兜底超时 360s
+  （用户可配置优先）；委托改为 pattern-first——子 Skill 只产代表性 pattern（4–8 小节），父 Skill 复制铺满，
+  避免整首全量输出导致单轮巨大、收敛慢、超时。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。
