@@ -46,6 +46,9 @@
 - 模型工具参数兼容（2026-08-17）：`propose_midi_changes` 经 `prepareArguments` 兼容垫片还原字符串化 `changeSet`（
   openai-completions 系模型常双重编码嵌套对象导致 "must be object"）；`create_track` 音符 `id` 改为可选（应用层自动生成），
   避免模型为大量音符逐一编 id 而被迫缩小编排规模。
+- 建轨提示修正（2026-08-17）：context-prompt 明确 create_track 可自定 `track.id`（供同候选内引用）与内联音符、
+  可设 `instrument`；删除「instrument 只读不能修改」的误导，音色改用 create_track/update_track 设置。
+  此前模型被误导后陷入「建轨→设音色→trackId 未知」死循环，提交了空轨道+set_loop、0 音符。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

@@ -174,6 +174,9 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
         issues.push({ path: `${path}.track`, message: "must be an object" });
         break;
       }
+      if (value.track.id !== undefined && !nonEmptyString(value.track.id)) {
+        issues.push({ path: `${path}.track.id`, message: "must be a non-empty string" });
+      }
       if (!nonEmptyString(value.track.name)) {
         issues.push({ path: `${path}.track.name`, message: "must be a non-empty string" });
       }
@@ -185,6 +188,9 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
       }
       if (value.track.program !== undefined && !integerInRange(value.track.program, 0, 127)) {
         issues.push({ path: `${path}.track.program`, message: "must be an integer from 0 to 127" });
+      }
+      if (value.track.instrument !== undefined && value.track.instrument !== null && !isInstrumentReferenceLike(value.track.instrument)) {
+        issues.push({ path: `${path}.track.instrument`, message: "must be a valid instrument reference or null" });
       }
       if (value.track.notes !== undefined) {
         if (!Array.isArray(value.track.notes)) {

@@ -82,4 +82,43 @@ describe("proposed change-set schema", () => {
     }];
     expect(parseProposedChangeSet(input).operations).toHaveLength(1);
   });
+
+  it("accepts create_track with a custom id and instrument reference", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: {
+        id: "bass",
+        name: "Bass",
+        role: "bass",
+        channel: 0,
+        program: 33,
+        muted: false,
+        solo: false,
+        instrument: { type: "soundfont", libraryId: "lib-1", bank: 0, program: 33 },
+        notes: [{ pitch: 48, startTick: 0, durationTicks: 480, velocity: 90 }],
+      },
+    }];
+    const parsed = parseProposedChangeSet(input);
+    const track = (parsed.operations[0] as unknown as { track: Record<string, unknown> }).track;
+    expect(track.id).toBe("bass");
+    expect(track.instrument).toMatchObject({ type: "soundfont", libraryId: "lib-1" });
+  });
+
+  it("rejects create_track with an invalid instrument reference", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: {
+        name: "Bass",
+        role: "bass",
+        channel: 0,
+        program: 33,
+        muted: false,
+        solo: false,
+        instrument: { type: "soundfont", libraryId: 5, bank: 0, program: 33 },
+      },
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(ChangeSetSchemaError);
+  });
 });

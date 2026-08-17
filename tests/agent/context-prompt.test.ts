@@ -45,7 +45,8 @@ describe("agent context prompt", () => {
 
   it("documents instrument search and set-instrument capability", () => {
     expect(AGENT_CONTEXT_PROMPT).toMatch(/instrument_search/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/set_track_instrument/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/不得编造音色引用/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/create_track/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/update_track/);
+    expect(AGENT_CONTEXT_PROMPT).toMatch(/不得编造音色引用|不得编造/);
   });
 });
