@@ -75,6 +75,9 @@
 - 生产安全收紧（2026-08-18）：生产 CSP 移除开发 `ws://127.0.0.1:5173`（开发态由 Vite 注入放宽版）；
   `session.defaultSession` 默认拒绝所有 Web 权限请求；electron-builder `electronFuses` 关闭 runAsNode /
   Node options / Node CLI inspect，开启 ASAR 完整性校验与仅从 ASAR 加载。
+- 真实云端回归与 e2e（2026-08-18）：`tests/agent/cloud-provider.test.ts`（三模式 + 错误 Key，`MAGENT_CLOUD_API_KEY`
+  门控）与 `tests/agent/cloud-e2e.test.ts`（@song-arranger → 委托 harmony → 合并）已用真实 Key 跑通；
+  未设置 Key 时自动跳过，不污染常规测试。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。
