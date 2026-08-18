@@ -150,4 +150,35 @@ describe("Pi agent kernel", () => {
     );
     expect(failedTool).toBeDefined();
   });
+
+  it("research 首轮工具调用后续跑一轮读取结果并输出结论", async () => {
+    const result = await runPiKernel({
+      requestId: "research-loop-1",
+      mode: "research",
+      objective: "分析旋律",
+      project: project(),
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall("inspect_midi_project", {})],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(fauxText("结论：旋律音域稳定，适合收束结尾。")),
+      ]),
+    });
+    expect(result.turns).toBeGreaterThanOrEqual(2);
+    expect(result.analysis).toContain("结论");
+  });
+
+  it("research 无工具调用时第一轮即停", async () => {
+    const result = await runPiKernel({
+      requestId: "research-stop-1",
+      mode: "research",
+      objective: "分析旋律",
+      project: project(),
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(fauxText("直接给出结论。")),
+      ]),
+    });
+    expect(result.turns).toBe(1);
+  });
 });

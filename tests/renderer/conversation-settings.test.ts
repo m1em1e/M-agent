@@ -17,6 +17,7 @@ describe("conversation settings", () => {
       thinkingLevel: "medium",
       goalMaxTurns: 20,
       goalMaxTokens: 500_000,
+      researchMaxTurns: 5,
       projectInjection: "all",
       skillTimeoutMs: undefined,
     });
@@ -31,6 +32,7 @@ describe("conversation settings", () => {
       thinkingLevel: "xhigh",
       goalMaxTurns: 500,
       goalMaxTokens: 10,
+      researchMaxTurns: 500,
       projectInjection: "selected",
       skillTimeoutMs: 9999,
     })).toEqual({
@@ -38,6 +40,7 @@ describe("conversation settings", () => {
       thinkingLevel: "medium",
       goalMaxTurns: 100,
       goalMaxTokens: 1_024,
+      researchMaxTurns: 100,
       projectInjection: "selected",
       skillTimeoutMs: 3_600,
     });
@@ -66,6 +69,7 @@ describe("conversation settings", () => {
       thinkingLevel: "high",
       goalMaxTurns: 24,
       goalMaxTokens: 750_000,
+      researchMaxTurns: 7,
       projectInjection: "selected",
       skillTimeoutMs: 300,
     };

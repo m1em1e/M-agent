@@ -25,7 +25,7 @@ import { registerUsageIpc } from "./usage-ipc.js";
 import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
 import { listSkillMeta } from "./skill-loader.js";
 import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
-import { APP_MENU_GROUPS, type AppMenuItem } from "../shared/menu.js";
+import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu.js";
 import type { ProjectOpenIntent } from "../shared/bridge.js";
 
 /** 用户在本会话中经对话框/打开确认过的可写工程路径（供「保存项目」免对话框直写）。 */
@@ -62,8 +62,8 @@ function installApplicationMenu(): void {
       return {
         label: item.label,
         submenu: recent.length > 0
-          ? recent.map((entry) => ({
-              label: entry.title || entry.path.split(/[\\/]/).pop() || entry.path,
+          ? recent.slice(0, 10).map((entry) => ({
+              label: recentProjectLabel(entry),
               click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu:open-recent", entry.path),
             }))
           : [{ label: "暂无最近项目", enabled: false }],

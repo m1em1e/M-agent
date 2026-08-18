@@ -69,7 +69,11 @@ export async function runAgent(
     modelId: authentication?.provider === "custom"
       ? (authentication.customProvider.activeModelId ?? authentication.customProvider.models[0]?.id)
       : authentication?.provider === "openai-codex" ? "gpt-5.4-mini" : "gpt-5-mini",
-    maximumTurns: payload.mode === "goal" ? conversation.goalMaxTurns : 2,
+    maximumTurns: payload.mode === "goal"
+      ? conversation.goalMaxTurns
+      : payload.mode === "research"
+        ? conversation.researchMaxTurns
+        : 2,
     maximumOutputTokens: payload.mode === "goal" ? conversation.goalMaxTokens : DEFAULT_CONVERSATION_SETTINGS.goalMaxTokens,
     thinkingLevel: conversation.thinkingLevel,
     projectInjection: conversation.projectInjection,

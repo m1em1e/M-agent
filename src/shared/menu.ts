@@ -33,6 +33,14 @@ export interface AppMenuGroup {
   items: AppMenuItem[];
 }
 
+/** 最近项目条目标签：真实标题优先；标题为空或「Untitled」时回退文件名（含扩展名）。 */
+export function recentProjectLabel(entry: { path: string; title?: string }): string {
+  const title = entry.title?.trim();
+  if (title && title !== "Untitled") return title;
+  const base = entry.path.split(/[\\/]/).pop();
+  return base || entry.path;
+}
+
 export const APP_MENU_GROUPS: AppMenuGroup[] = [
   {
     key: "file",

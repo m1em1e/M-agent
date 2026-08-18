@@ -867,8 +867,9 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
       }
       if (turns >= maximumTurns) return true;
       if (outputTokens >= maximumOutputTokens) return true;
-      // research 普通模式每轮即停；skill 作用域允许在还有工具调用时续跑（让父 Skill 能 invoke 后总结）。
-      if (request.mode === "research") return !request.skill || !messageHasToolCalls(message);
+      // research：最后一轮含工具调用则续跑一轮读取结果并输出结论（支持多轮调研）；
+      // 无工具调用即停。轮次上限由 maximumTurns（research 默认 researchMaxTurns）兜底。
+      if (request.mode === "research") return !messageHasToolCalls(message);
       return candidates.length > 0 && turns >= 2;
     },
     beforeToolCall: async ({ toolCall }) => {

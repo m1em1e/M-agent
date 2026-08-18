@@ -5,7 +5,7 @@ interface RecentProjectsSchema {
   projects: RecentProject[];
 }
 
-const MAX_RECENT = 8;
+const MAX_RECENT = 10;
 
 let store: Store<RecentProjectsSchema> | undefined;
 

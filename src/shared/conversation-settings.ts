@@ -12,6 +12,8 @@ export interface ConversationSettings {
   thinkingLevel: PiThinkingLevel;
   goalMaxTurns: number;
   goalMaxTokens: number;
+  /** 调研（research）模式最大轮次：支持多轮工具调用后综合结论。 */
+  researchMaxTurns: number;
   /** 工程注入方式：selected 注入概览 + 选中轨道音符明细；all 注入完整工程 JSON。 */
   projectInjection: ProjectInjectionMode;
   /** 子 Skill 调用兜底超时（秒）。undefined 表示不限时，仅由取消/预算控制。 */
@@ -21,6 +23,7 @@ export interface ConversationSettings {
 export const CONVERSATION_SETTINGS_STORAGE_KEY = "magent.conversation.v1";
 export const GOAL_MAX_TURNS_RANGE = { minimum: 1, maximum: 100 } as const;
 export const GOAL_MAX_TOKENS_RANGE = { minimum: 1_024, maximum: 2_000_000 } as const;
+export const RESEARCH_MAX_TURNS_RANGE = { minimum: 1, maximum: 100 } as const;
 export const SKILL_TIMEOUT_RANGE = { minimum: 1, maximum: 3_600 } as const;
 
 export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
@@ -28,6 +31,7 @@ export const DEFAULT_CONVERSATION_SETTINGS: ConversationSettings = {
   thinkingLevel: "medium",
   goalMaxTurns: 20,
   goalMaxTokens: 500_000,
+  researchMaxTurns: 5,
   projectInjection: "all",
   skillTimeoutMs: undefined,
 };
@@ -53,6 +57,9 @@ export function normalizeConversationSettings(value: unknown): ConversationSetti
     goalMaxTokens: typeof candidate.goalMaxTokens === "number" && Number.isFinite(candidate.goalMaxTokens)
       ? clampInteger(candidate.goalMaxTokens, GOAL_MAX_TOKENS_RANGE.minimum, GOAL_MAX_TOKENS_RANGE.maximum)
       : DEFAULT_CONVERSATION_SETTINGS.goalMaxTokens,
+    researchMaxTurns: typeof candidate.researchMaxTurns === "number" && Number.isFinite(candidate.researchMaxTurns)
+      ? clampInteger(candidate.researchMaxTurns, RESEARCH_MAX_TURNS_RANGE.minimum, RESEARCH_MAX_TURNS_RANGE.maximum)
+      : DEFAULT_CONVERSATION_SETTINGS.researchMaxTurns,
     projectInjection: typeof candidate.projectInjection === "string" && injectionModes.has(candidate.projectInjection)
       ? candidate.projectInjection as ProjectInjectionMode
       : DEFAULT_CONVERSATION_SETTINGS.projectInjection,

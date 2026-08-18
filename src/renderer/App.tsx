@@ -26,7 +26,7 @@ import type { ShellCheckResult } from "../shared/shell";
 import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument } from "../shared/instrument";
 import { buildProjectInstruments } from "../shared/instrument";
 import type { SkillTraceEntry } from "../core/agent/skills/types";
-import { APP_MENU_GROUPS, type AppMenuItem } from "../shared/menu";
+import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu";
 import { AudioEngine } from "./audio/audio-engine";
 import { MarkdownContent } from "./markdown";
 import {
@@ -48,6 +48,7 @@ import {
   loadConversationSettings,
   PI_THINKING_LEVELS,
   PROJECT_INJECTION_MODES,
+  RESEARCH_MAX_TURNS_RANGE,
   SKILL_TIMEOUT_RANGE,
   saveConversationSettings,
   type ConversationSettings,
@@ -683,14 +684,21 @@ function MenuItemList({
 }) {
   const resolved = items.flatMap((item) => {
     if (!item.recentProjects) return [item];
+    // 最近项目渲染为 hover 展开的子菜单项（保留「最近打开项目」父项结构）。
     if (recentProjects.length === 0) {
-      return [{ label: "暂无最近项目", disabled: true } as AppMenuItem];
+      return [{
+        label: "最近打开项目",
+        submenu: [{ label: "暂无最近项目", disabled: true } as AppMenuItem],
+      } as AppMenuItem];
     }
-    return recentProjects.map((entry) => ({
-      label: entry.title || entry.path.split(/[\\/]/).pop() || entry.path,
-      action: "open-recent-project",
-      payload: entry.path,
-    } as AppMenuItem));
+    return [{
+      label: "最近打开项目",
+      submenu: recentProjects.slice(0, 10).map((entry) => ({
+        label: recentProjectLabel(entry),
+        action: "open-recent-project",
+        payload: entry.path,
+      } as AppMenuItem)),
+    } as AppMenuItem];
   });
   return (
     <>
@@ -3048,7 +3056,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   )}
                 </div>
               )}
-              <span>{mode === "goal" ? `最多 ${conversationSettings.goalMaxTurns} 轮` : modeMeta[mode].short}</span>
+              <span>{mode === "goal" ? `最多 ${conversationSettings.goalMaxTurns} 轮` : mode === "research" ? `最多 ${conversationSettings.researchMaxTurns} 轮` : modeMeta[mode].short}</span>
             </div>
             <div className="prompt-input-wrap" ref={promptWrapRef}>
               <textarea
@@ -3212,6 +3220,21 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         onChange={(event) => {
                           const value = Number(event.target.value);
                           if (Number.isFinite(value)) setConversationSettings((current) => ({ ...current, goalMaxTurns: Math.min(GOAL_MAX_TURNS_RANGE.maximum, Math.max(GOAL_MAX_TURNS_RANGE.minimum, Math.round(value))) }));
+                        }}
+                      />
+                    </label>
+                    <label className="settings-row">
+                      <div><strong>调研最大轮次</strong><span>仅作用于调研模式；最后一轮含工具调用时会续跑读取结果，轮次上限由此控制。</span></div>
+                      <input
+                        type="number"
+                        min={RESEARCH_MAX_TURNS_RANGE.minimum}
+                        max={RESEARCH_MAX_TURNS_RANGE.maximum}
+                        step="1"
+                        value={conversationSettings.researchMaxTurns}
+                        data-conversation-setting="research-max-turns"
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (Number.isFinite(value)) setConversationSettings((current) => ({ ...current, researchMaxTurns: Math.min(RESEARCH_MAX_TURNS_RANGE.maximum, Math.max(RESEARCH_MAX_TURNS_RANGE.minimum, Math.round(value))) }));
                         }}
                       />
                     </label>
