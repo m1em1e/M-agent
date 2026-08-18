@@ -2,6 +2,7 @@ import type { MidiProject, ProposedChangeSet } from "../../../shared/midi.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { PiThinkingLevel } from "../../../shared/conversation-settings.js";
 import type { AgentLogSink } from "../../../shared/agent-log.js";
+import type { InstrumentLibrarySummary } from "../../../shared/instrument.js";
 import { isTransientAgentError } from "../errors.js";
 import { skillAvailabilityReason } from "./registry.js";
 import type { SkillLoader } from "./loader.js";
@@ -26,7 +27,15 @@ export interface ChildKernelRequest {
   credentials?: CredentialStore;
   customProvider?: PiCustomProviderConfig;
   modelId?: string;
+  maximumTurns?: number;
+  maximumOutputTokens?: number;
   thinkingLevel?: PiThinkingLevel;
+  /** 工程注入方式（复用父级，避免子 Skill 重新探测）。 */
+  projectInjection?: "all" | "selected";
+  /** 配合 projectInjection === "selected" 使用的选中轨道。 */
+  focusTrackId?: string;
+  /** 系统音源库条目（供子 Skill 的 instrument_search 使用）。 */
+  instruments?: InstrumentLibrarySummary[];
   /** 发现层：全部 Skill 的 name/description。 */
   skillMetas?: SkillMeta[];
   skill?: {
@@ -68,7 +77,12 @@ export interface InvokeSkillOptions {
     credentials?: CredentialStore;
     customProvider?: PiCustomProviderConfig;
     modelId?: string;
+    maximumTurns?: number;
+    maximumOutputTokens?: number;
     thinkingLevel?: PiThinkingLevel;
+    projectInjection?: "all" | "selected";
+    focusTrackId?: string;
+    instruments?: InstrumentLibrarySummary[];
     signal?: AbortSignal;
   };
   runKernel: ChildRunKernel;
@@ -150,7 +164,12 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     credentials: options.parent.credentials,
     customProvider: options.parent.customProvider,
     modelId: options.parent.modelId,
+    maximumTurns: options.parent.maximumTurns,
+    maximumOutputTokens: options.parent.maximumOutputTokens,
     thinkingLevel: options.parent.thinkingLevel,
+    projectInjection: options.parent.projectInjection,
+    focusTrackId: options.parent.focusTrackId,
+    instruments: options.parent.instruments,
     skillMetas: options.skillMetas,
     skill: {
       name: targetSkill,

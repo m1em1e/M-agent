@@ -11,9 +11,9 @@
 3. **目标模式评估闭环未完成**：真实 Pi 路径未复用 `GoalRunner` 的成本预算、确定性评分、排序与诊断；界面候选分数按候选顺序生成，不是模型或确定性评估结果。待办：统一 Pi 编排与 GoalRunner，或把预算与评估能力迁入 Pi 运行层。
 4. **候选缺少工程版本绑定**：候选生成后工程继续变化时，旧候选可能在语义过期后仍被应用；当前 ID 与数值校验只能阻止结构错误。**已修复（2026-08-18）**：请求/候选携带工程内容哈希（`projectVersionOf`），应用前比对拒绝过期候选。
 5. **真实云端 Provider 的自动化回归测试缺失**：自定义供应商（OpenAI Responses 等）已实现并可在应用中实际添加与使用；但缺少用真实 API Key 覆盖「请求与工具调用、认证失败/限流/网络错误/中止、实际 Token/费用/输出质量、在线三模式行为」的自动化回归与现场测试；ChatGPT Plus/Pro OAuth 已接入但未发起真实请求验证 entitlement。**部分完成（2026-08-18）**：新增 `tests/agent/cloud-provider.test.ts`（`MAGENT_CLOUD_API_KEY` 门控，未设置自动跳过），已用真实 Key 验证 research/plan/goal 三模式、错误 Key 可辨识报错；OAuth entitlement 真实请求验证未做。
-6. **设置板块后端能力尚未补齐**：用量（Pi Token/费用/模型/按日统计未持久化）、插件（无清单/Manifest/权限/安装/启停/隔离执行）、插件主题贡献尚未实际载入、多设备偏好同步未实现。在相应后端完成前不得显示伪造的费用/设备/插件数据。
-7. **生产安全收紧**：CSP 移除开发用 `ws://127.0.0.1:5173`、默认拒绝的 Session 权限处理器、Electron fuses（关 Node/调试入口、ASAR 完整性）未配置；内置 Pi 包完全缺失时主进程可能在红色提示渲染前退出（待动态加载或安装器完整性修复）。**部分完成（2026-08-18）**：CSP/权限处理器/fuses 已收紧；「内置 Pi 包缺失时主进程不崩溃」未做。
-8. **优化 Skill 调用**：Skill 系统已重构为 v3 一层委托（leaf 守卫、按需加载、预算 1/2/4，见 IMPLEMENTED §5），离线 tool loop 与单测已覆盖。**云端 e2e 已验证（2026-08-18）**：`tests/agent/cloud-e2e.test.ts` 用真实 Key 跑通「@song-arranger → 委托 harmony-arranger → 合并统一候选」。待办：评估子 Skill 复用父级模型/会话上下文以减少重复调用，优化失败重试与降级策略。
+6. **设置板块后端能力尚未补齐**（**已移至长期**，独立大功能）：用量（Pi Token/费用/模型/按日统计未持久化）、插件（无清单/Manifest/权限/安装/启停/隔离执行）、插件主题贡献尚未实际载入、多设备偏好同步未实现。在相应后端完成前不得显示伪造的费用/设备/插件数据。
+7. **生产安全收紧**：CSP 移除开发用 `ws://127.0.0.1:5173`、默认拒绝的 Session 权限处理器、Electron fuses（关 Node/调试入口、ASAR 完整性）未配置；内置 Pi 包完全缺失时主进程可能在红色提示渲染前退出（待动态加载或安装器完整性修复）。**已完成（2026-08-18）**：CSP/权限处理器/fuses 已收紧；`agent:run` 惰性加载 agent-service、environment-service 惰性加载 pi-ai 运行期值——Pi 包缺失时红色「内置 Pi 内核」提示可渲染、返回可辨识错误而非崩溃。
+8. **优化 Skill 调用**：Skill 系统已重构为 v3 一层委托（leaf 守卫、按需加载、预算 1/2/4，见 IMPLEMENTED §5），离线 tool loop 与单测已覆盖。**云端 e2e 已验证（2026-08-18）**：`tests/agent/cloud-e2e.test.ts` 用真实 Key 跑通「@song-arranger → 委托 harmony-arranger → 合并统一候选」。**子 Skill 复用父级上下文已完成（2026-08-18）**：子请求透传 projectInjection/focusTrackId/instruments/maximumTurns/maximumOutputTokens。待办：失败重试与降级策略进一步优化。
 
 ## P2：跨平台、数据契约、安全与体验完善
 

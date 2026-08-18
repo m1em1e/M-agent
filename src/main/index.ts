@@ -7,7 +7,6 @@ import type { RendererProjectPayload } from "../shared/bridge.js";
 import type { MidiProject } from "../shared/midi.js";
 import { assertProjectFile, rendererPayloadToProject } from "./project-adapter.js";
 import { clearApiKey, getApiKey, hasApiKey } from "./secure-settings.js";
-import { runAgent } from "./agent-service.js";
 import {
   getStartupEnvironmentReport,
   clearProviderApiKey,
@@ -294,6 +293,14 @@ ipcMain.handle("agent:run", async (event, payload: unknown) => {
   activeAgentRuns.set(senderId, controller);
   event.sender.once("destroyed", abortOnDestroyed);
   try {
+    // 惰性加载 agent-service：内置 Pi 包缺失时不至于在启动阶段崩溃，
+    // 而是返回可辨识错误（红色「内置 Pi 内核」提示可正常渲染）。
+    let runAgent: typeof import("./agent-service.js").runAgent;
+    try {
+      ({ runAgent } = await import("./agent-service.js"));
+    } catch (error) {
+      throw new Error("内置 Pi 内核不可用，请重新安装应用。");
+    }
     return await runAgent(
       payload,
       await resolveAgentAuthentication(controller.signal),

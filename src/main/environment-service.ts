@@ -1,12 +1,9 @@
-import {
-  createModels,
-  type AuthPrompt,
-  type Credential,
-  type CredentialInfo,
-  type CredentialStore,
+import type {
+  AuthPrompt,
+  Credential,
+  CredentialInfo,
+  CredentialStore,
 } from "@earendil-works/pi-ai";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { app, safeStorage } from "electron";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -24,6 +21,24 @@ import { PiCliCredentialStore } from "./pi-cli-credential-store.js";
 import { getActiveSubscriptionProfile, readSubscriptionApiKey } from "./subscription-store.js";
 import { checkConfiguredShell } from "./shell-service.js";
 import type { ShellCheckResult } from "../shared/shell.js";
+
+/**
+ * 惰性加载 pi-ai 运行期值：启动路径（环境报告）不依赖 pi-ai 模块，
+ * 包缺失时红色「内置 Pi 内核」提示仍能渲染；仅认证/登录等真正用到时
+ * 才动态加载，失败抛可辨识错误而非崩溃。
+ */
+async function loadPiRuntime(): Promise<{
+  createModels: typeof import("@earendil-works/pi-ai").createModels;
+  openaiProvider: () => ReturnType<typeof import("@earendil-works/pi-ai/providers/openai").openaiProvider>;
+  openaiCodexProvider: () => ReturnType<typeof import("@earendil-works/pi-ai/providers/openai-codex").openaiCodexProvider>;
+}> {
+  const [{ createModels }, { openaiProvider }, { openaiCodexProvider }] = await Promise.all([
+    import("@earendil-works/pi-ai"),
+    import("@earendil-works/pi-ai/providers/openai"),
+    import("@earendil-works/pi-ai/providers/openai-codex"),
+  ]);
+  return { createModels, openaiProvider, openaiCodexProvider };
+}
 
 export type AgentAuthentication =
   | { provider: "openai"; apiKey?: string; credentials?: CredentialStore }
@@ -180,12 +195,13 @@ export async function resolveAgentAuthentication(signal?: AbortSignal): Promise<
   const secureApiKey = getApiKey();
   if (secureApiKey) return { provider: "openai", apiKey: secureApiKey };
   const appCredentials = getPiCredentialStore();
-  const appModels = createModels({ credentials: appCredentials });
-  appModels.setProvider(openaiCodexProvider());
+  const pi = await loadPiRuntime();
+  const appModels = pi.createModels({ credentials: appCredentials });
+  appModels.setProvider(pi.openaiCodexProvider());
   if (await appModels.getAuth("openai-codex", { signal })) {
     return { provider: "openai-codex", credentials: appCredentials };
   }
-  const models = createProviderModels(appCredentials);
+  const models = await createProviderModels(appCredentials);
   if (await models.getAuth("openai", { signal })) return { provider: "openai", credentials: appCredentials };
   return null;
 }
@@ -197,8 +213,9 @@ export async function loginOpenAICodex(
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("当前系统无法安全加密订阅凭据，不能在应用内登录。");
   }
-  const models = createModels({ credentials: getPiCredentialStore() });
-  models.setProvider(openaiCodexProvider());
+  const pi = await loadPiRuntime();
+  const models = pi.createModels({ credentials: getPiCredentialStore() });
+  models.setProvider(pi.openaiCodexProvider());
   let browserOpenError: Error | undefined;
   await models.login(APP_LOGIN_PROVIDER, "oauth", {
     signal,
@@ -273,7 +290,7 @@ async function inspectProviders(dependencies: EnvironmentDependencies): Promise<
 }> {
   const appEntries = await safeList(dependencies.appCredentials);
   const piEntries = await safeList(dependencies.piCredentials);
-  const models = createProviderModels(dependencies.appCredentials);
+  const models = await createProviderModels(dependencies.appCredentials);
   const apiSource: ProviderStatus["source"] = dependencies.secureApiKey
     ? "app"
     : appEntries.some((entry) => entry.providerId === "openai")
@@ -349,10 +366,11 @@ async function inspectProviders(dependencies: EnvironmentDependencies): Promise<
   };
 }
 
-function createProviderModels(credentials: CredentialStore) {
-  const models = createModels({ credentials });
-  models.setProvider(openaiProvider());
-  models.setProvider(openaiCodexProvider());
+async function createProviderModels(credentials: CredentialStore) {
+  const pi = await loadPiRuntime();
+  const models = pi.createModels({ credentials });
+  models.setProvider(pi.openaiProvider());
+  models.setProvider(pi.openaiCodexProvider());
   return models;
 }
 
