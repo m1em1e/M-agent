@@ -181,4 +181,39 @@ describe("Pi agent kernel", () => {
     });
     expect(result.turns).toBe(1);
   });
+
+  it("analyze_midi_project 无分页参数时返回紧凑摘要而非全量工程", async () => {
+    const result = await runPiKernel({
+      requestId: "analyze-summary-1",
+      mode: "research",
+      objective: "分析旋律",
+      project: project(),
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall("analyze_midi_project", {})],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(fauxText("完成。")),
+      ]),
+    });
+    // 摘要路径不抛错；事件中包含 analyze 工具调用。
+    expect(result.events.some((event) => event.type === "tool_start" && event.name === "analyze_midi_project")).toBe(true);
+  });
+
+  it("analyze_midi_project 按 trackId/cursor/limit 分页返回音符切片", async () => {
+    const result = await runPiKernel({
+      requestId: "analyze-page-1",
+      mode: "research",
+      objective: "分页读取旋律轨",
+      project: project(),
+      offlineScript: (faux) => faux.setResponses([
+        fauxAssistantMessage(
+          [fauxToolCall("analyze_midi_project", { trackId: "melody", cursor: 0, limit: 2 })],
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage(fauxText("完成。")),
+      ]),
+    });
+    expect(result.events.some((event) => event.type === "tool_end" && event.name === "analyze_midi_project" && !event.isError)).toBe(true);
+  });
 });

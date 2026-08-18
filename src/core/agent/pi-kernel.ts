@@ -265,6 +265,52 @@ function analysisSnapshot(project: Readonly<MidiProject>) {
   };
 }
 
+interface AnalyzeProjectPageParams {
+  focus?: string;
+  trackId?: string;
+  startTick?: number;
+  endTick?: number;
+  cursor?: number;
+  limit?: number;
+}
+
+/**
+ * analyze_midi_project 的返回：无分页参数时返回紧凑摘要；有 trackId/tick 范围时
+ * 按 cursor/limit 分页返回音符切片，避免大工程一次性 dump 全文。
+ */
+function analyzeProjectPage(
+  project: Readonly<MidiProject>,
+  params: AnalyzeProjectPageParams,
+): Record<string, unknown> {
+  if (!params.trackId && params.startTick === undefined && params.endTick === undefined) {
+    return { focus: params.focus ?? null, summary: analysisSnapshot(project) };
+  }
+  const track = project.tracks.find((item) => item.id === params.trackId);
+  if (params.trackId && !track) {
+    return { focus: params.focus ?? null, error: `Unknown track '${params.trackId}'.` };
+  }
+  const sourceTracks = track ? [track] : project.tracks;
+  const notes = sourceTracks.flatMap((item) => item.notes).filter((note) => {
+    if (params.startTick !== undefined && note.startTick + note.durationTicks < params.startTick) return false;
+    if (params.endTick !== undefined && note.startTick > params.endTick) return false;
+    return true;
+  });
+  const limit = params.limit ?? 500;
+  const cursor = params.cursor ?? 0;
+  const page = notes.slice(cursor, cursor + limit);
+  return {
+    focus: params.focus ?? null,
+    trackId: track?.id ?? null,
+    startTick: params.startTick ?? null,
+    endTick: params.endTick ?? null,
+    cursor,
+    limit,
+    total: notes.length,
+    hasMore: cursor + page.length < notes.length,
+    notes: page,
+  };
+}
+
 
 export function buildProjectContext(request: PiKernelRequest): string {
   // 子 Skill：注入紧凑上下文，不 dump 完整工程；细节由 inspect/analyze 按需读取。
@@ -377,7 +423,14 @@ function createTools(
   },
 ): AgentTool[] {
   const inspectParameters = Type.Object({});
-  const analyzeParameters = Type.Object({ focus: Type.Optional(Type.String()) });
+  const analyzeParameters = Type.Object({
+    focus: Type.Optional(Type.String()),
+    trackId: Type.Optional(Type.String()),
+    startTick: Type.Optional(Type.Integer({ minimum: 0 })),
+    endTick: Type.Optional(Type.Integer({ minimum: 0 })),
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000 })),
+  });
   const proposeParameters = Type.Object({ changeSet: proposedChangeSetSchema });
   const inspect: AgentTool<typeof inspectParameters> = {
     name: "inspect_midi_project",
@@ -392,10 +445,10 @@ function createTools(
   const analyze: AgentTool<typeof analyzeParameters> = {
     name: "analyze_midi_project",
     label: "Analyze MIDI project",
-    description: "Read the full normalized MIDI project for musical analysis. This never mutates it.",
+    description: "Read project notes for musical analysis. Without pagination it returns a compact summary; use trackId/startTick/endTick/cursor/limit to page through note data. This never mutates the project.",
     parameters: analyzeParameters,
     execute: async (_id, params) => ({
-      content: [{ type: "text", text: JSON.stringify({ focus: params.focus, project: request.project }) }],
+      content: [{ type: "text", text: JSON.stringify(analyzeProjectPage(request.project, params)) }],
       details: { readOnly: true },
     }),
   };

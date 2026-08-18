@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type OpenDialogOptions } from "electron";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readFile, stat, writeFile } from "node:fs/promises";
@@ -333,6 +333,9 @@ registerInstrumentLibraryIpc();
 
 app.whenReady().then(() => {
   installApplicationMenu();
+  // 安全：默认拒绝任何 Web 权限请求（摄像头/麦克风/通知/地理等均不需要）；
+  // 明确需要的权限可在此白名单放行。
+  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   void (async () => {
     try {
       const legacyKey = getApiKey();

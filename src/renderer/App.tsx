@@ -22,6 +22,7 @@ import type {
   UsageSummary,
 } from "../shared/bridge";
 import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent, TickRange, TimeSignatureEvent } from "../shared/midi";
+import { projectVersionOf } from "../shared/project-version";
 import type { ShellCheckResult } from "../shared/shell";
 import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument } from "../shared/instrument";
 import { buildProjectInstruments } from "../shared/instrument";
@@ -134,6 +135,8 @@ interface Candidate {
   changeSet: ProposedChangeSet;
   supported: boolean;
   sourceMode: AgentMode;
+  /** 生成该候选时的工程版本（用于应用前比对；undefined 表示离线/跳过校验）。 */
+  projectVersion?: string;
   state?: "accepted" | "rejected";
 }
 
@@ -417,7 +420,7 @@ const APPLICABLE_OPERATION_TYPES = new Set([
   "create_track", "delete_track", "set_tempo", "set_time_signature", "set_loop", "clear_loop",
 ]);
 
-const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sourceMode: AgentMode): Candidate => {
+const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sourceMode: AgentMode, projectVersion?: string): Candidate => {
   let notesAdded = 0;
   let notesChanged = 0;
   let notesDeleted = 0;
@@ -445,6 +448,7 @@ const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sou
     changeSet,
     supported: supported && !validationFailed,
     sourceMode,
+    projectVersion,
   };
 };
 
@@ -1836,12 +1840,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         setCandidates(requestMode === "goal" ? seedCandidates.map((candidate) => ({ ...candidate, id: uid("candidate") })) : []);
         return;
       }
+      const projectVersion = projectVersionOf(projectPayload());
       const response = await magent.runAgent({
         mode: requestMode,
         objective: clean,
         project: projectPayload(),
         conversation: conversationSettings,
         focusTrackId: selectedTrack?.id,
+        projectVersion,
       });
       finalizeRunMessage({
         text: `${response.analysis}${response.provider === "pi-offline" ? "（离线分析）" : ""}`,
@@ -1851,7 +1857,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       });
       setCandidates(requestMode === "research"
         ? []
-        : response.candidates.map((changeSet, index) => candidateFromChangeSet(changeSet, index, requestMode)));
+        : response.candidates.map((changeSet, index) => candidateFromChangeSet(changeSet, index, requestMode, response.projectVersion ?? projectVersion)));
     } catch (error) {
       const message = cleanAgentError(error);
       if (/已取消/.test(message)) {
@@ -1873,6 +1879,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   const acceptCandidate = (candidate: Candidate) => {
     if (mode !== "goal" || candidate.sourceMode !== "goal" || !candidate.supported || candidate.state) return;
+    if (candidate.projectVersion !== undefined) {
+      const currentVersion = projectVersionOf(projectPayload());
+      if (currentVersion !== candidate.projectVersion) {
+        showToast("工程已发生变化，该候选可能已过期，请重新生成。");
+        return;
+      }
+    }
     try {
       const applied = applyNoteChangeSet(tracks, candidate.changeSet);
       commitTracks(applied.tracks, true);

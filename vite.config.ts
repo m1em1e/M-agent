@@ -36,11 +36,28 @@ function copyWorkletProcessor(): Plugin {
   };
 }
 
+/**
+ * 开发态 CSP 覆盖：生产 index.html 用严格 CSP（connect-src 不含 ws），
+ * 但开发时 Vite HMR 需要 ws://127.0.0.1:5173，故仅在 dev server 模式下放宽。
+ */
+function devCsp(): Plugin {
+  return {
+    name: "magent-dev-csp",
+    apply: "serve",
+    transformIndexHtml(html) {
+      return html.replace(
+        "connect-src 'self' data:",
+        "connect-src 'self' ws://127.0.0.1:5173 data:",
+      );
+    },
+  };
+}
+
 export default defineConfig({
   root: "src/renderer",
   // Production is loaded through file://, so emitted assets must stay relative.
   base: "./",
-  plugins: [react(), copyWorkletProcessor()],
+  plugins: [react(), copyWorkletProcessor(), devCsp()],
   resolve: {
     alias: {
       "@shared": fileURLToPath(new URL("./src/shared", import.meta.url)),

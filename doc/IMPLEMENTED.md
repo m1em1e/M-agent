@@ -68,6 +68,13 @@
   支持多轮调研；新增设置项「调研最大轮次」（默认 5，1–100），设置 UI 与模式提示同步。
 - 最近项目子菜单（2026-08-18）：窗口内应用菜单栏「最近打开项目」由平铺改为 hover 展开的子菜单（与 macOS
   系统菜单一致）；标签用 `recentProjectLabel`（真实标题优先，Untitled/空回退文件名）；最近项目上限 8→10。
+- 工程分析分页（2026-08-18）：`analyze_midi_project` 默认只返回紧凑摘要；支持 `trackId`/`startTick`/`endTick`/
+  `cursor`/`limit` 分页读取音符，避免大工程一次性全量 dump 超上下文/高费用。
+- 候选版本绑定（2026-08-18）：请求携带工程内容哈希（`projectVersionOf`，FNV-1a），候选携带生成时版本；
+  应用前比对，工程已变化时拒绝应用过期候选（离线演示跳过）。
+- 生产安全收紧（2026-08-18）：生产 CSP 移除开发 `ws://127.0.0.1:5173`（开发态由 Vite 注入放宽版）；
+  `session.defaultSession` 默认拒绝所有 Web 权限请求；electron-builder `electronFuses` 关闭 runAsNode /
+  Node options / Node CLI inspect，开启 ASAR 完整性校验与仅从 ASAR 加载。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

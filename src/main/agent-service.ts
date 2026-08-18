@@ -136,6 +136,7 @@ export async function runAgent(
     cacheReadTokens: result.cacheReadTokens,
     cacheWriteTokens: result.cacheWriteTokens,
     cost: result.cost,
+    projectVersion: payload.projectVersion,
     skillTrace: result.skillTrace,
   };
   logger({ type: "agent.response", requestId, response });

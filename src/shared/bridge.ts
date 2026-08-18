@@ -84,6 +84,8 @@ export interface AgentRequestPayload {
   conversation?: ConversationSettings;
   /** 当前选中的轨道 id；配合 conversation.projectInjection === "selected" 使用。 */
   focusTrackId?: string;
+  /** 工程内容哈希，用于候选版本绑定；应用候选前比对。 */
+  projectVersion?: string;
 }
 
 export interface AgentResponsePayload {
@@ -101,6 +103,8 @@ export interface AgentResponsePayload {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   cost: number;
+  /** 生成候选时对应的工程版本（透传请求值）。 */
+  projectVersion?: string;
   /** Skill 嵌套调用轨迹（非 skill 运行为空数组）。 */
   skillTrace: SkillTraceEntry[];
 }
