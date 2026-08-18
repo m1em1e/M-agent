@@ -149,6 +149,33 @@ describe("invokeSkill success path", () => {
     expect(result.error).toContain("boom");
   });
 
+  it("瞬时流错误时自动重试一次并成功", async () => {
+    const state = createInvocationState();
+    state.parentSkill = "song-arranger";
+    state.visited = ["song-arranger"];
+    let calls = 0;
+    const result = await call(state, "harmony-arranger", async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("Stream ended without finish_reason");
+      return cannedRun()({} as ChildKernelRequest);
+    });
+    expect(result.status).toBe("ok");
+    expect(calls).toBe(2);
+  });
+
+  it("瞬时流错误重试后仍失败则返回 error", async () => {
+    const state = createInvocationState();
+    state.parentSkill = "song-arranger";
+    state.visited = ["song-arranger"];
+    let calls = 0;
+    const result = await call(state, "harmony-arranger", async () => {
+      calls += 1;
+      throw new Error("Stream ended without finish_reason");
+    });
+    expect(result.status).toBe("error");
+    expect(calls).toBe(2);
+  });
+
   it("未设置 childTimeoutMs 时不附加超时信号", async () => {
     const state = createInvocationState();
     state.parentSkill = "song-arranger";

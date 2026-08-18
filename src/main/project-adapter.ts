@@ -149,7 +149,7 @@ function assertTrackShapes(tracks: unknown[], context: string): void {
     if (value.volume !== undefined && (typeof value.volume !== "number" || !Number.isFinite(value.volume))) {
       throw new Error(`${context}的第 ${trackIndex + 1} 条轨道音量无效。`);
     }
-    if (value.instrument !== undefined && !isInstrumentReference(value.instrument)) {
+    if (value.instrument != null && !isInstrumentReference(value.instrument)) {
       throw new Error(`${context}的第 ${trackIndex + 1} 条轨道音源引用无效。`);
     }
     noteCount += value.notes.length;

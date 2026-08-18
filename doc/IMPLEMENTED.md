@@ -57,6 +57,10 @@
   （按序把多个 pattern 铺满目标轨道，支持 transpose 转调 / velocityOffset 力度递进 / densityGrow 密度递增）。
   在 `parseProposedChangeSet` 阶段展开为具体 insert_notes，工程得到真实音符；下游（校验/merge/apply/渲染）
   只看到 insert_notes，改动集中在解析处。解决「模型只会写 1 小节 pattern 却无法铺满 90 秒」的问题。
+- 子 Skill 瞬时错误重试（2026-08-18）：`isTransientAgentError` 抽到 `src/core/agent/errors.ts`（主进程与子 Skill 复用）；
+  `invokeSkill` 对瞬时流/网络错误自动重试一次，提高偶发上游中断（如 `Stream ended without finish_reason`）的自愈率。
+- instrument:null 修复（2026-08-18）：渲染层 `create_track` 应用时把 `instrument: null` 归一为 `undefined`
+  （避免保存/导出报「音源引用无效」）；`project-adapter` 校验改用 `!= null` 把 null 视为「无音色」而非非法。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

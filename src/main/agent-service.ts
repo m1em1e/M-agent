@@ -16,6 +16,7 @@ import {
 import { rendererPayloadToProject } from "./project-adapter.js";
 import type { AgentAuthentication } from "./environment-service.js";
 import { recordUsage } from "./usage-store.js";
+import { isTransientAgentError } from "../core/agent/errors.js";
 
 /**
  * Main-process orchestration boundary. Every cloud or offline request runs
@@ -162,16 +163,6 @@ function localDayKey(date: Date): string {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-/** 判定 Agent 运行失败是否为可重试的瞬时错误（流终止/网络/超时）。 */
-const NON_TRANSIENT_AGENT_ERROR_PATTERN = /(401|403|429|insufficient_quota|billing|quota|balance|api[ _]?key|authentication|unauthorized|permission|not supported|unknown model|model.*not|invalid request)/i;
-const TRANSIENT_AGENT_ERROR_PATTERN = /(n response event|stream ended|stream did not end|ended before|fetch failed|network error|connection (refused|lost|reset)|socket hang up|other side closed|reset before headers|timed ?out|timeout|terminated|ECONNRESET|EPIPE|ENOTFOUND|EAI_AGAIN|upstream connect|502|503|504|524|overloaded|service unavailable|internal error)/i;
-
-function isTransientAgentError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  if (NON_TRANSIENT_AGENT_ERROR_PATTERN.test(message)) return false;
-  return TRANSIENT_AGENT_ERROR_PATTERN.test(message);
 }
 
 export { isTransientAgentError };

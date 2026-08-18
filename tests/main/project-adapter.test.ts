@@ -90,6 +90,14 @@ describe("main-process project payload boundary", () => {
     })).toThrow(/音量无效/);
   });
 
+  it("accepts a null track instrument reference as 'no instrument'", () => {
+    // null 应视为「无音色」，不再抛「音源引用无效」。
+    expect(() => rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{ ...rendererProject.tracks[0], instrument: null } as unknown as typeof rendererProject.tracks[0]],
+    })).not.toThrow();
+  });
+
   it("rejects malformed nested project metadata", () => {
     const normalized = rendererPayloadToProject(rendererProject);
     expect(() => assertProjectFile({ ...normalized, tempoMap: [null] })).toThrow(/速度图/);

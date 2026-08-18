@@ -554,7 +554,7 @@ function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet):
           muted: input.muted ?? false,
           solo: input.solo ?? false,
           volume: input.volume,
-          instrument: input.instrument,
+          instrument: input.instrument ?? undefined,
           notes: (input.notes ?? []).map((note) => ({
             id: note.id ?? uid("agent-note"),
             pitch: note.pitch,

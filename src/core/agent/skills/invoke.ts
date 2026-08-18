@@ -2,6 +2,7 @@ import type { MidiProject, ProposedChangeSet } from "../../../shared/midi.js";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { PiThinkingLevel } from "../../../shared/conversation-settings.js";
 import type { AgentLogSink } from "../../../shared/agent-log.js";
+import { isTransientAgentError } from "../errors.js";
 import { skillAvailabilityReason } from "./registry.js";
 import type { SkillLoader } from "./loader.js";
 import type {
@@ -166,8 +167,30 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     logger: options.logger,
   };
 
+  let childResult: ChildKernelResult;
   try {
-    const childResult = await options.runKernel(childRequest);
+    childResult = await options.runKernel(childRequest);
+  } catch (firstError) {
+    // 子 Skill 瞬时流/网络错误自动重试一次（无副作用，仅重复 token 成本），提高偶发上游中断的自愈率。
+    if (!isTransientAgentError(firstError)) {
+      const message = firstError instanceof Error ? firstError.message : String(firstError);
+      options.logger?.({ type: "skill.retry_skipped", requestId: options.parent.requestId, skill: targetSkill, error: message });
+      return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 运行失败：${message}`));
+    }
+    options.logger?.({
+      type: "skill.retry",
+      requestId: options.parent.requestId,
+      skill: targetSkill,
+      error: firstError instanceof Error ? firstError.message : String(firstError),
+    });
+    try {
+      childResult = await options.runKernel(childRequest);
+    } catch (secondError) {
+      const message = secondError instanceof Error ? secondError.message : String(secondError);
+      return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 运行失败：${message}`));
+    }
+  }
+  try {
     const operations = childResult.candidates.flatMap((candidate) => candidate.operations);
     const affectedTracks = [...new Set(operations.flatMap((op) =>
       "trackId" in op && typeof op.trackId === "string" ? [op.trackId] : []))];
@@ -190,7 +213,7 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     return finishTrace(options, startedAt, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 运行失败：${message}`));
+    return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 结果处理失败：${message}`));
   }
 }
 
