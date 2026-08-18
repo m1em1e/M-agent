@@ -1,5 +1,6 @@
 import type {
   MidiEditOperation,
+  NoteInput,
   ValidationIssue,
   ValidationResult,
 } from "../../shared/midi.js";
@@ -30,6 +31,8 @@ const OPERATION_TYPES = new Set([
   "set_time_signature",
   "set_loop",
   "clear_loop",
+  "define_pattern",
+  "arrange_pattern",
 ]);
 
 const TRACK_ROLES = new Set(["melody", "harmony", "bass", "drums", "other"]);
@@ -277,6 +280,53 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
     }
     case "clear_loop":
       break;
+    case "define_pattern": {
+      if (!nonEmptyString(value.patternId)) {
+        issues.push({ path: `${path}.patternId`, message: "must be a non-empty string" });
+      }
+      validateTrackId(value, path, issues);
+      if (!integerInRange(value.lengthTicks, 1, Number.MAX_SAFE_INTEGER)) {
+        issues.push({ path: `${path}.lengthTicks`, message: "must be a positive integer" });
+      }
+      if (!Array.isArray(value.notes) || value.notes.length === 0) {
+        issues.push({ path: `${path}.notes`, message: "must contain at least one note" });
+      } else {
+        value.notes.forEach((note, noteIndex) =>
+          validateNote(note, `${path}.notes[${noteIndex}]`, issues),
+        );
+      }
+      break;
+    }
+    case "arrange_pattern": {
+      validateTrackId(value, path, issues);
+      if (!Array.isArray(value.parts) || value.parts.length === 0) {
+        issues.push({ path: `${path}.parts`, message: "must contain at least one part" });
+        break;
+      }
+      value.parts.forEach((part, partIndex) => {
+        const partPath = `${path}.parts[${partIndex}]`;
+        if (!isRecord(part)) {
+          issues.push({ path: partPath, message: "must be an object" });
+          return;
+        }
+        if (!nonEmptyString(part.patternId)) {
+          issues.push({ path: `${partPath}.patternId`, message: "must be a non-empty string" });
+        }
+        if (!integerInRange(part.startTick, 0, Number.MAX_SAFE_INTEGER)) {
+          issues.push({ path: `${partPath}.startTick`, message: "must be a non-negative integer" });
+        }
+        if (part.repeats !== undefined && !integerInRange(part.repeats, 1, 200)) {
+          issues.push({ path: `${partPath}.repeats`, message: "must be an integer from 1 to 200" });
+        }
+        if (part.transpose !== undefined && !integerInRange(part.transpose, -127, 127)) {
+          issues.push({ path: `${partPath}.transpose`, message: "must be an integer from -127 to 127" });
+        }
+        if (part.velocityOffset !== undefined && !integerInRange(part.velocityOffset, -127, 127)) {
+          issues.push({ path: `${partPath}.velocityOffset`, message: "must be an integer from -127 to 127" });
+        }
+      });
+      break;
+    }
   }
 }
 
@@ -369,13 +419,102 @@ export function parseProposedChangeSet(input: unknown): ProposedChangeSet {
     throw new ChangeSetSchemaError(issues);
   }
 
+  const operations = expandPatternOperations(input.operations as unknown as MidiEditOperation[], issues);
+  if (issues.length > 0) {
+    throw new ChangeSetSchemaError(issues);
+  }
+
   return {
     id: input.id as string,
     summary: input.summary as string,
-    operations: [...(input.operations as unknown as MidiEditOperation[])],
+    operations,
     validation: parsedValidation,
     estimatedAffectedNotes: input.estimatedAffectedNotes as number,
   };
+}
+
+/** 展开 define_pattern / arrange_pattern 为具体 insert_notes（应用变奏），下游只看到 insert_notes。 */
+function expandPatternOperations(
+  operations: MidiEditOperation[],
+  issues: SchemaIssue[],
+): MidiEditOperation[] {
+  const patterns = new Map<string, { trackId: string; lengthTicks: number; notes: NoteInput[] }>();
+  const expanded: MidiEditOperation[] = [];
+
+  for (const operation of operations) {
+    if (operation.type === "define_pattern") {
+      if (patterns.has(operation.patternId)) {
+        issues.push({ path: "operations", message: `重复的 patternId：${operation.patternId}` });
+        continue;
+      }
+      patterns.set(operation.patternId, {
+        trackId: operation.trackId,
+        lengthTicks: operation.lengthTicks,
+        notes: operation.notes,
+      });
+      continue;
+    }
+    if (operation.type === "arrange_pattern") {
+      for (const part of operation.parts) {
+        const pattern = patterns.get(part.patternId);
+        if (!pattern) {
+          issues.push({ path: "operations", message: `arrange_pattern 引用了未定义的 patternId：${part.patternId}` });
+          continue;
+        }
+        const repeats = part.repeats ?? 1;
+        for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex += 1) {
+          const offset = part.startTick + repeatIndex * pattern.lengthTicks;
+          const notes = applyPatternVariation(pattern.notes, repeatIndex, part);
+          if (notes.length > 0) {
+            const shifted = notes.map((note) => ({ ...note, startTick: note.startTick + offset }));
+            expanded.push({ type: "insert_notes", trackId: pattern.trackId, notes: shifted });
+          }
+        }
+      }
+      continue;
+    }
+    expanded.push(operation);
+  }
+  return expanded;
+}
+
+/** 对 pattern 音符应用变奏：转调 / 力度 / 密度递进。 */
+function applyPatternVariation(
+  notes: NoteInput[],
+  repeatIndex: number,
+  part: { transpose?: number; velocityOffset?: number; densityGrow?: boolean },
+): NoteInput[] {
+  const transpose = part.transpose ?? 0;
+  const velocityOffset = part.velocityOffset ?? 0;
+  let result = notes.map((note) => ({
+    pitch: clamp(note.pitch + transpose, 0, 127),
+    startTick: note.startTick,
+    durationTicks: note.durationTicks,
+    velocity: clamp(note.velocity + velocityOffset, 1, 127),
+  }));
+  if (part.densityGrow && repeatIndex > 0 && result.length > 1) {
+    // 密度递进：每次重复额外补插各相邻音符的中点，使节奏密度随 repeatIndex 增加。
+    for (let grow = 0; grow < repeatIndex; grow += 1) {
+      const filled: NoteInput[] = [];
+      for (let index = 0; index < result.length; index += 1) {
+        filled.push(result[index]);
+        const next = result[index + 1];
+        if (!next) continue;
+        filled.push({
+          pitch: result[index].pitch,
+          startTick: Math.floor((result[index].startTick + next.startTick) / 2),
+          durationTicks: Math.max(1, Math.floor(result[index].durationTicks / 2)),
+          velocity: result[index].velocity,
+        });
+      }
+      result = filled;
+    }
+  }
+  return result;
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 export function isProposedChangeSet(input: unknown): input is ProposedChangeSet {

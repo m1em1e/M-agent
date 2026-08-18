@@ -121,4 +121,102 @@ describe("proposed change-set schema", () => {
     }];
     expect(() => parseProposedChangeSet(input)).toThrow(ChangeSetSchemaError);
   });
+
+  it("expands define_pattern + arrange_pattern into insert_notes", () => {
+    const input = validRawChangeSet();
+    input.operations = [
+      {
+        type: "define_pattern",
+        patternId: "p1",
+        trackId: "drums",
+        lengthTicks: 1920,
+        notes: [
+          { pitch: 36, startTick: 0, durationTicks: 240, velocity: 90 },
+          { pitch: 38, startTick: 480, durationTicks: 240, velocity: 85 },
+        ],
+      },
+      {
+        type: "arrange_pattern",
+        trackId: "drums",
+        parts: [{ patternId: "p1", startTick: 0, repeats: 3 }],
+      },
+    ];
+    const parsed = parseProposedChangeSet(input);
+    // define_pattern 不产生输出；arrange_pattern 展开为 repeats 条 insert_notes。
+    const inserts = parsed.operations.filter((op) => op.type === "insert_notes");
+    expect(inserts).toHaveLength(3);
+    const second = inserts[1] as { notes: Array<{ startTick: number }> };
+    expect(second.notes[0].startTick).toBe(1920);
+    const third = inserts[2] as { notes: Array<{ startTick: number }> };
+    expect(third.notes[1].startTick).toBe(480 + 2 * 1920);
+  });
+
+  it("applies transpose and velocityOffset in arrange_pattern", () => {
+    const input = validRawChangeSet();
+    input.operations = [
+      {
+        type: "define_pattern",
+        patternId: "p1",
+        trackId: "bass",
+        lengthTicks: 1920,
+        notes: [{ pitch: 40, startTick: 0, durationTicks: 480, velocity: 80 }],
+      },
+      {
+        type: "arrange_pattern",
+        trackId: "bass",
+        parts: [{ patternId: "p1", startTick: 0, repeats: 2, transpose: 3, velocityOffset: 10 }],
+      },
+    ];
+    const parsed = parseProposedChangeSet(input);
+    const inserts = parsed.operations.filter((op) => op.type === "insert_notes");
+    expect(inserts).toHaveLength(2);
+    const first = inserts[0] as { notes: Array<{ pitch: number; velocity: number }> };
+    expect(first.notes[0].pitch).toBe(43);
+    expect(first.notes[0].velocity).toBe(90);
+  });
+
+  it("grows density with densityGrow across repeats", () => {
+    const input = validRawChangeSet();
+    input.operations = [
+      {
+        type: "define_pattern",
+        patternId: "p1",
+        trackId: "drums",
+        lengthTicks: 960,
+        notes: [
+          { pitch: 36, startTick: 0, durationTicks: 240, velocity: 90 },
+          { pitch: 42, startTick: 480, durationTicks: 240, velocity: 80 },
+        ],
+      },
+      {
+        type: "arrange_pattern",
+        trackId: "drums",
+        parts: [{ patternId: "p1", startTick: 0, repeats: 3, densityGrow: true }],
+      },
+    ];
+    const parsed = parseProposedChangeSet(input);
+    const inserts = parsed.operations.filter((op) => op.type === "insert_notes");
+    const noteCounts = inserts.map((op) => (op as { notes: unknown[] }).notes.length);
+    // 密度递进：每次 repeat 增加若干补插音（2 → 3 → 5）。
+    expect(noteCounts).toEqual([2, 3, 5]);
+  });
+
+  it("rejects arrange_pattern referencing an undefined patternId", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "arrange_pattern",
+      trackId: "drums",
+      parts: [{ patternId: "missing", startTick: 0 }],
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(/未定义的 patternId/);
+  });
+
+  it("rejects duplicate patternId definitions", () => {
+    const input = validRawChangeSet();
+    input.operations = [
+      { type: "define_pattern", patternId: "p1", trackId: "drums", lengthTicks: 960, notes: [{ pitch: 36, startTick: 0, durationTicks: 240, velocity: 90 }] },
+      { type: "define_pattern", patternId: "p1", trackId: "bass", lengthTicks: 960, notes: [{ pitch: 40, startTick: 0, durationTicks: 240, velocity: 90 }] },
+    ];
+    expect(() => parseProposedChangeSet(input)).toThrow(/重复的 patternId/);
+  });
 });

@@ -124,7 +124,29 @@ export type MidiEditOperation =
       denominator: number;
     }
   | { type: "set_loop"; startTick: number; endTick: number }
-  | { type: "clear_loop" };
+  | { type: "clear_loop" }
+  | {
+      /** 定义一个可复用的 pattern（音符相对 pattern 起点），供 arrange_pattern 引用。 */
+      type: "define_pattern";
+      patternId: string;
+      trackId: string;
+      /** pattern 时长（tick），用于 arrange 的重复间距。 */
+      lengthTicks: number;
+      notes: NoteInput[];
+    }
+  | {
+      /** 按序把多个 pattern 铺到目标轨道，可带变奏（转调/力度/密度递进）。 */
+      type: "arrange_pattern";
+      trackId: string;
+      parts: Array<{
+        patternId: string;
+        startTick: number;
+        repeats?: number;
+        transpose?: number;
+        velocityOffset?: number;
+        densityGrow?: boolean;
+      }>;
+    };
 
 export type ValidationSeverity = "error" | "warning";
 

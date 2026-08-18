@@ -53,6 +53,10 @@
   （思考段落盘/工具事件/UI 进度始终执行），避免超长 thinking 流导致进度中断；子 Skill 默认兜底超时 360s
   （用户可配置优先）；委托改为 pattern-first——子 Skill 只产代表性 pattern（4–8 小节），父 Skill 复制铺满，
   避免整首全量输出导致单轮巨大、收敛慢、超时。
+- pattern 库 + 编排（2026-08-18）：新增 `define_pattern`（定义某轨道可复用 pattern）与 `arrange_pattern`
+  （按序把多个 pattern 铺满目标轨道，支持 transpose 转调 / velocityOffset 力度递进 / densityGrow 密度递增）。
+  在 `parseProposedChangeSet` 阶段展开为具体 insert_notes，工程得到真实音符；下游（校验/merge/apply/渲染）
+  只看到 insert_notes，改动集中在解析处。解决「模型只会写 1 小节 pattern 却无法铺满 90 秒」的问题。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。
