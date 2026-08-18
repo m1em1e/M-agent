@@ -3,7 +3,7 @@ import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { PiThinkingLevel } from "../../../shared/conversation-settings.js";
 import type { AgentLogSink } from "../../../shared/agent-log.js";
 import type { InstrumentLibrarySummary } from "../../../shared/instrument.js";
-import { isTransientAgentError } from "../errors.js";
+import { isTransientAgentError, delayRetry } from "../errors.js";
 import { skillAvailabilityReason } from "./registry.js";
 import type { SkillLoader } from "./loader.js";
 import type {
@@ -196,17 +196,30 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
       options.logger?.({ type: "skill.retry_skipped", requestId: options.parent.requestId, skill: targetSkill, error: message });
       return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 运行失败：${message}`));
     }
+    const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
     options.logger?.({
       type: "skill.retry",
       requestId: options.parent.requestId,
       skill: targetSkill,
-      error: firstError instanceof Error ? firstError.message : String(firstError),
+      error: firstMessage,
     });
+    await delayRetry();
     try {
       childResult = await options.runKernel(childRequest);
     } catch (secondError) {
       const message = secondError instanceof Error ? secondError.message : String(secondError);
-      return finishTrace(options, startedAt, failure(`子 Skill ${targetSkill} 运行失败：${message}`));
+      options.logger?.({
+        type: "skill.retry_failed",
+        requestId: options.parent.requestId,
+        skill: targetSkill,
+        firstError: firstMessage,
+        error: message,
+      });
+      // 降级：两次瞬时失败，结构化返回错误（含两次原因），供顶层决定 fallback。
+      return finishTrace(options, startedAt, {
+        ...failure(`子 Skill ${targetSkill} 运行失败（重试后仍失败）：${message}`),
+        warnings: [...failure(`子 Skill ${targetSkill} 运行失败（重试后仍失败）：${message}`).warnings, `首次错误：${firstMessage}`],
+      });
     }
   }
   try {

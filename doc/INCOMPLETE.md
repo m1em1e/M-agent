@@ -8,7 +8,6 @@
 
 1. **目标模式评估闭环未完成**：真实 Pi 路径未复用 `GoalRunner` 的成本预算、确定性评分、排序与诊断；界面候选分数按候选顺序生成，不是模型或确定性评估结果。待办：统一 Pi 编排与 GoalRunner，或把预算与评估能力迁入 Pi 运行层。
 2. **设置板块后端能力尚未补齐**（**已移至长期**，独立大功能）：用量（Pi Token/费用/模型/按日统计未持久化）、插件（无清单/Manifest/权限/安装/启停/隔离执行）、插件主题贡献尚未实际载入、多设备偏好同步未实现。在相应后端完成前不得显示伪造的费用/设备/插件数据。
-3. **优化 Skill 调用**：Skill 系统已重构为 v3 一层委托（leaf 守卫、按需加载、预算 1/2/4，见 IMPLEMENTED §5），离线 tool loop 与单测已覆盖。**云端 e2e 已验证（2026-08-18）**：`tests/agent/cloud-e2e.test.ts` 用真实 Key 跑通「@song-arranger → 委托 harmony-arranger → 合并统一候选」。**子 Skill 复用父级上下文已完成（2026-08-18）**：子请求透传 projectInjection/focusTrackId/instruments/maximumTurns/maximumOutputTokens。待办：失败重试与降级策略进一步优化。
 
 ## P2：跨平台、数据契约、安全与体验完善
 

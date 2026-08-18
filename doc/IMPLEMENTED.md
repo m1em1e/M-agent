@@ -82,6 +82,9 @@
   内置 Pi 包缺失时红色「内置 Pi 内核」提示仍可渲染、返回可辨识错误，主进程不再于启动阶段崩溃。
 - 子 Skill 复用父级上下文（2026-08-18）：子请求透传 `projectInjection`/`focusTrackId`/`instruments`/
   `maximumTurns`/`maximumOutputTokens`，减少子 Skill 重复探测，预算与父级一致。
+- 失败重试与降级优化（2026-08-18）：瞬时错误重试前退避 1s（`RETRY_BACKOFF_MS`/`delayRetry`，主进程与子 Skill 复用）；
+  重试后仍失败时结构化返回首次+二次错误原因（`skill.retry_failed`/`agent.retry_failed` 日志 + 首次错误写入 warnings），
+  供顶层判断 fallback。
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。

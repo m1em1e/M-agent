@@ -163,7 +163,7 @@ describe("invokeSkill success path", () => {
     expect(calls).toBe(2);
   });
 
-  it("瞬时流错误重试后仍失败则返回 error", async () => {
+  it("瞬时流错误重试后仍失败则返回 error 且带首次错误告警", async () => {
     const state = createInvocationState();
     state.parentSkill = "song-arranger";
     state.visited = ["song-arranger"];
@@ -174,6 +174,8 @@ describe("invokeSkill success path", () => {
     });
     expect(result.status).toBe("error");
     expect(calls).toBe(2);
+    expect(result.error).toContain("重试后仍失败");
+    expect(result.warnings.some((warning) => warning.includes("首次错误"))).toBe(true);
   });
 
   it("未设置 childTimeoutMs 时不附加超时信号", async () => {

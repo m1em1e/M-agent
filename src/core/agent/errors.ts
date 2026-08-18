@@ -16,3 +16,10 @@ export function isTransientAgentError(error: unknown): boolean {
   if (NON_TRANSIENT_AGENT_ERROR_PATTERN.test(message)) return false;
   return TRANSIENT_AGENT_ERROR_PATTERN.test(message);
 }
+
+/** 瞬时错误重试退避：每次重试前等待，给上游恢复窗口。 */
+export const RETRY_BACKOFF_MS = 1_000;
+
+export function delayRetry(ms = RETRY_BACKOFF_MS): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

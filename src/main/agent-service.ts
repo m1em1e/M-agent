@@ -16,7 +16,7 @@ import {
 import { rendererPayloadToProject } from "./project-adapter.js";
 import type { AgentAuthentication } from "./environment-service.js";
 import { recordUsage } from "./usage-store.js";
-import { isTransientAgentError } from "../core/agent/errors.js";
+import { isTransientAgentError, delayRetry } from "../core/agent/errors.js";
 
 /**
  * Main-process orchestration boundary. Every cloud or offline request runs
@@ -104,9 +104,18 @@ export async function runAgent(
       logger({ type: "agent.error", requestId, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
-    console.warn(`[agent] 检测到瞬时流错误，重试一次：${error instanceof Error ? error.message : String(error)}`);
-    logger({ type: "agent.retry", requestId, error: error instanceof Error ? error.message : String(error) });
-    result = await runPiKernel(buildRequest());
+    const firstMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[agent] 检测到瞬时流错误，重试一次：${firstMessage}`);
+    logger({ type: "agent.retry", requestId, error: firstMessage });
+    await delayRetry();
+    try {
+      result = await runPiKernel(buildRequest());
+    } catch (secondError) {
+      const message = secondError instanceof Error ? secondError.message : String(secondError);
+      logger({ type: "agent.retry_failed", requestId, firstError: firstMessage, error: message });
+      console.warn(`[agent] 重试后仍失败：${message}`);
+      throw secondError;
+    }
   }
   if (result.provider !== "pi-offline") {
     recordUsage({
