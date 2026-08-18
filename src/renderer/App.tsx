@@ -197,7 +197,6 @@ interface ApplyResult {
 
 const PPQ = 480;
 const BEATS_PER_BAR = 4;
-const BAR_COUNT = 16;
 const MIN_PITCH = 36;
 const MAX_PITCH = 96;
 
@@ -383,6 +382,19 @@ const modeMeta: Record<AgentMode, { label: string; short: string; description: s
   research: { label: "调研", short: "只读", description: "只分析工程，不产生任何修改。" },
   plan: { label: "计划", short: "预览", description: "提出操作方案和差异，但不写入工程。" },
   goal: { label: "目标", short: "可编辑", description: "生成受约束的候选，确认后写入工程。" },
+};
+
+/** 依据工程音符的实际长度计算应显示的小节数：至少 16，末尾留 4 小节余量。 */
+const computeBarCount = (tracks: { notes: Array<{ startTick: number; durationTicks: number }> }[], ppq: number): number => {
+  const maxTick = tracks.reduce(
+    (maximum, track) => Math.max(maximum, track.notes.reduce(
+      (trackMax, note) => Math.max(trackMax, note.startTick + note.durationTicks),
+      0,
+    )),
+    0,
+  );
+  const bars = Math.ceil(maxTick / (BEATS_PER_BAR * ppq));
+  return Math.max(16, bars + 4);
 };
 
 const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.map((track, index) => ({
@@ -727,6 +739,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [tool, setTool] = useState<EditorTool>("pointer");
   const [zoom, setZoom] = useState(1);
+  /** 钢琴卷帘/播放显示的小节数：至少 16，随工程实际长度动态扩展（max(16, 实际小节+4)）。 */
+  const [barCount, setBarCount] = useState(16);
   const [gridTicks, setGridTicks] = useState(PPQ / 4);
   const [tempo, setTempo] = useState(104);
   const [timeSigNumerator, setTimeSigNumerator] = useState(4);
@@ -824,7 +838,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const liveThinkingFlushTimerRef = useRef<number | null>(null);
 
   const beatWidth = 54 * zoom;
-  const canvasWidth = KEY_WIDTH + BAR_COUNT * BEATS_PER_BAR * beatWidth;
+  const canvasWidth = KEY_WIDTH + barCount * BEATS_PER_BAR * beatWidth;
   const selectedTrack = tracks.find((track) => track.id === selectedTrackId) ?? tracks[0];
   const selectedNote = selectedTrack?.notes.find((note) => note.id === selectedNoteId) ?? null;
   const magent = (window as unknown as { magent?: MagentBridge }).magent;
@@ -1070,7 +1084,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   });
 
   const restoreSnapshot = useCallback((snap: EditorSnapshot) => {
-    setTracks(cloneTracks(snap.tracks));
+    const restored = cloneTracks(snap.tracks);
+    setTracks(restored);
+    setBarCount(computeBarCount(restored, projectPpq));
     setTempo(snap.tempo);
     setTimeSigNumerator(snap.timeSigNumerator);
     setTimeSigDenominator(snap.timeSigDenominator);
@@ -1090,14 +1106,15 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           revisions: [],
           agentSessions: [],
         });
-  }, []);
+  }, [projectPpq]);
 
   const commitTracks = useCallback((next: MidiTrack[], preserveCandidates = false) => {
     setPast((history) => [...history.slice(-39), cloneSnapshot(editorStateRef.current)]);
     setFuture([]);
     setTracks(next);
+    setBarCount(computeBarCount(next, projectPpq));
     if (!preserveCandidates) setCandidates([]);
-  }, []);
+  }, [projectPpq]);
 
   const undo = useCallback(() => {
     setCandidates([]);
@@ -1259,7 +1276,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
     }
 
-    for (let beat = 0; beat <= BAR_COUNT * BEATS_PER_BAR; beat += 1) {
+    for (let beat = 0; beat <= barCount * BEATS_PER_BAR; beat += 1) {
       const x = KEY_WIDTH + beat * beatWidth;
       const isBar = beat % BEATS_PER_BAR === 0;
       context.strokeStyle = isBar
@@ -1270,7 +1287,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       context.moveTo(x + 0.5, RULER_HEIGHT);
       context.lineTo(x + 0.5, CANVAS_HEIGHT);
       context.stroke();
-      if (isBar && beat < BAR_COUNT * BEATS_PER_BAR) {
+      if (isBar && beat < barCount * BEATS_PER_BAR) {
         context.fillStyle = themeColor("--canvas-ruler-text", "#8d9290");
         context.font = "10px ui-monospace, monospace";
         context.textBaseline = "middle";
@@ -1521,7 +1538,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     startedAtRef.current = performance.now();
     startTickRef.current = currentPlayheadRef.current;
     lastTickRef.current = currentPlayheadRef.current;
-    const maxTick = BAR_COUNT * BEATS_PER_BAR * projectPpq;
+    const maxTick = barCount * BEATS_PER_BAR * projectPpq;
     let frame = 0;
     const update = (now: number) => {
       const elapsed = now - startedAtRef.current;
@@ -1576,7 +1593,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const onCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = canvasPoint(event);
     if (y < RULER_HEIGHT && x > KEY_WIDTH) {
-      setPlayhead(clamp((x - KEY_WIDTH) / beatWidth * projectPpq, 0, BAR_COUNT * BEATS_PER_BAR * projectPpq));
+      setPlayhead(clamp((x - KEY_WIDTH) / beatWidth * projectPpq, 0, barCount * BEATS_PER_BAR * projectPpq));
       return;
     }
     if (x <= KEY_WIDTH || y <= RULER_HEIGHT || !selectedTrack) return;
@@ -1887,6 +1904,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setIsPlaying(false);
     const loadedTracks = projectToTracks(result.project);
     setTracks(loadedTracks);
+    setBarCount(computeBarCount(loadedTracks, result.project.ppq));
     setProjectFilePath(source === "工程" ? (result.filePath ?? "") : "");
     setProjectInstruments(result.project.instruments?.map((instrument) => ({ ...instrument })) ?? []);
     setProjectTitle(result.project.title || "Untitled");
@@ -1940,6 +1958,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setProjectPpq(PPQ);
     setProjectMetadata(null);
     setTracks([]);
+    setBarCount(16);
     setSelectedTrackId("");
     setSelectedNoteId(null);
     setPlayhead(0);
