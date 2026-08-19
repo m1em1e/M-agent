@@ -810,6 +810,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [exportSampleRate, setExportSampleRate] = useState<ExportSampleRate>(DEFAULT_EXPORT_SAMPLE_RATE);
   const [exportLoopOnly, setExportLoopOnly] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  /** 悬停在选中轨道循环带左/右边缘（可缩放）时显示左右箭头光标。 */
+  const [loopEdgeHover, setLoopEdgeHover] = useState(false);
   const [shellPath, setShellPath] = useState(DEFAULT_SHELL_SETTINGS.path);
   const [shellCheck, setShellCheck] = useState<ShellCheckResult | null>(null);
   const [shellBusy, setShellBusy] = useState(false);
@@ -1747,6 +1749,10 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   const onCanvasPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = canvasPoint(event);
+    if (!drag) {
+      const band = y < RULER_HEIGHT && x > KEY_WIDTH ? loopBandAt(x) : null;
+      setLoopEdgeHover(band?.hit === "resize-start" || band?.hit === "resize-end");
+    }
     if (!drag && pendingLoopCreateRef.current) {
       const pending = pendingLoopCreateRef.current;
       if (Math.abs(x - pending.x) > 3) {
@@ -1800,6 +1806,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   };
 
   const onCanvasPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    setLoopEdgeHover(false);
     if (pendingLoopCreateRef.current) {
       pendingLoopCreateRef.current = null;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
@@ -3097,11 +3104,16 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           <div className="canvas-scroll" ref={scrollRef}>
             <canvas
               ref={canvasRef}
-              className={tool === "pencil" ? "pencil-cursor" : ""}
+              className={[
+                tool === "pencil" ? "pencil-cursor" : "",
+                (loopEdgeHover || drag?.kind === "loop-resize-start" || drag?.kind === "loop-resize-end")
+                  ? "loop-resize-cursor" : "",
+              ].join(" ")}
               onPointerDown={onCanvasPointerDown}
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
               onPointerCancel={onCanvasPointerUp}
+              onPointerLeave={() => setLoopEdgeHover(false)}
               onContextMenu={onCanvasContextMenu}
               onDoubleClick={onCanvasDoubleClick}
             />

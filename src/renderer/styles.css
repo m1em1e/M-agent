@@ -751,6 +751,7 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .canvas-scroll { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: none; background: #101314; }
 .canvas-scroll canvas { display: block; touch-action: none; cursor: default; }
 .canvas-scroll canvas.pencil-cursor { cursor: crosshair; }
+.canvas-scroll canvas.loop-resize-cursor { cursor: ew-resize; }
 .editor-statusbar { display: flex; align-items: center; gap: 13px; padding: 0 10px; border-top: 1px solid var(--line); background: #111415; color: #555b58; font: 7px "JetBrains Mono", monospace; letter-spacing: .05em; white-space: nowrap; }
 .editor-statusbar kbd { padding: 2px 3px; border: 1px solid #303536; border-radius: 2px; background: #191c1d; color: #737976; font: inherit; }
 
