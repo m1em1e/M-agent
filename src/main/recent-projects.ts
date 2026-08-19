@@ -31,3 +31,12 @@ export function recordRecentProject(path: string, title?: string): RecentProject
 export function approveProjectPath(path: string): void {
   recordRecentProject(path);
 }
+
+/** 从最近项目列表移除指定路径（如文件已不存在或不可访问）。 */
+export function removeRecentProject(path: string): RecentProject[] {
+  const clean = path.trim();
+  if (!clean) return listRecentProjects();
+  const next = listRecentProjects().filter((entry) => entry.path !== clean);
+  recentStore().set("projects", next);
+  return next;
+}

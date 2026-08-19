@@ -23,7 +23,7 @@ import { registerSubscriptionIpc } from "./subscription-ipc.js";
 import { registerUsageIpc } from "./usage-ipc.js";
 import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
 import { listSkillMeta } from "./skill-loader.js";
-import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
+import { listRecentProjects, recordRecentProject, removeRecentProject } from "./recent-projects.js";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu.js";
 import { computeUiZoomFactor } from "./ui-zoom.js";
 import { installSystemProxyFetch } from "./net-fetch.js";
@@ -39,6 +39,10 @@ const MAX_PROJECT_FILE_BYTES = 32 * 1024 * 1024;
 /** 音频导出字节上限（WAV 最大约 30 分钟 @48kHz 立体声 16bit）。 */
 const MAX_AUDIO_EXPORT_BYTES = 512 * 1024 * 1024;
 const ZOOM_APPLY_THRESHOLD = 0.01;
+/** 打开工程文件的访问超时：避免已卸载/不可达路径（网络盘等）挂起阻塞启动。 */
+const FILE_ACCESS_TIMEOUT_MS = 3000;
+/** 工程文件不存在或不可访问时的可辨识错误标记（渲染端据此弹窗引导）。 */
+const PROJECT_MISSING_MARKER = "PROJECT_MISSING";
 
 // 让主进程的模型请求走系统代理（见 net-fetch.ts）。必须在任何请求发出前安装。
 installSystemProxyFetch();
@@ -415,13 +419,44 @@ function sanitizeExportName(name: string): string {
 }
 
 async function openProjectFile(filePath: string): Promise<{ canceled: false; filePath: string; project: MidiProject }> {
-  await assertFileSize(filePath, MAX_PROJECT_FILE_BYTES, "工程文件");
-  const project: unknown = JSON.parse(await readFile(filePath, "utf8"));
-  assertProjectFile(project);
-  recordRecentProject(filePath, project.title);
-  approvedSavePaths.add(filePath);
-  refreshNativeMenu();
-  return { canceled: false, filePath, project };
+  try {
+    const project: unknown = JSON.parse(await withTimeout(readProjectFile(filePath), FILE_ACCESS_TIMEOUT_MS));
+    assertProjectFile(project);
+    recordRecentProject(filePath, project.title);
+    approvedSavePaths.add(filePath);
+    refreshNativeMenu();
+    return { canceled: false, filePath, project };
+  } catch (error) {
+    // 文件不存在（ENOENT）或访问超时（网络盘/已卸载盘挂起）视为「工程缺失」：
+    // 自动从最近列表移除，避免每次启动重试与卡顿；并抛可辨识错误供渲染端弹窗引导。
+    if (isProjectMissingError(error)) {
+      removeRecentProject(filePath);
+      throw new Error(PROJECT_MISSING_MARKER);
+    }
+    throw error;
+  }
+}
+
+async function readProjectFile(filePath: string): Promise<string> {
+  const info = await stat(filePath);
+  if (!info.isFile()) throw new Error("工程文件路径不是普通文件。");
+  if (info.size > MAX_PROJECT_FILE_BYTES) throw new Error("工程文件超过允许的大小上限。");
+  return readFile(filePath, "utf8");
+}
+
+function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(PROJECT_MISSING_MARKER)), milliseconds);
+    }),
+  ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
+}
+
+function isProjectMissingError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (error as NodeJS.ErrnoException).code === "ENOENT" || error.message === PROJECT_MISSING_MARKER;
 }
 
 async function saveProjectToFile(project: MidiProject, filePath: string): Promise<void> {

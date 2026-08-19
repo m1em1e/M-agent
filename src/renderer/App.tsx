@@ -281,6 +281,12 @@ const cleanAgentError = (error: unknown): string => {
   return message.trim() || "Agent 请求失败。";
 };
 
+/** 判定最近工程打开失败是否源于「工程缺失/不可访问」（主进程 PROJECT_MISSING 标记）。 */
+const isMissingProjectError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("PROJECT_MISSING");
+};
+
 const pattern = (
   pitches: number[],
   every: number,
@@ -763,6 +769,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [projectFilePath, setProjectFilePath] = useState("");
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [windowChoice, setWindowChoice] = useState<ProjectOpenIntent | null>(null);
+  const [missingProject, setMissingProject] = useState<{ path: string } | null>(null);
   const [tracks, setTracks] = useState<MidiTrack[]>(() => cloneTracks(initialTracks));
   const [selectedTrackId, setSelectedTrackId] = useState(initialTracks[0].id);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -2195,13 +2202,21 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   /** 项目另存为：总是弹出对话框选择新路径。 */
   const saveProjectAs = () => void persistProject(null);
 
-  const openRecentProject = async (path: string): Promise<boolean> => {
-    if (!magent?.openProjectAt) { showToast("桌面文件桥尚未连接"); return false; }
+  const openRecentProject = async (path: string): Promise<"opened" | "missing" | "failed"> => {
+    if (!magent?.openProjectAt) { showToast("桌面文件桥尚未连接"); return "failed"; }
     try {
       const loaded = loadProjectResult(await magent.openProjectAt(path), "工程");
       if (loaded) void loadRecentProjects();
-      return loaded;
-    } catch (error) { showToast(errorMessage(error, "打开最近工程失败")); return false; }
+      return loaded ? "opened" : "failed";
+    } catch (error) {
+      if (isMissingProjectError(error)) {
+        setMissingProject({ path });
+        void loadRecentProjects();
+        return "missing";
+      }
+      showToast(errorMessage(error, "打开最近工程失败"));
+      return "failed";
+    }
   };
 
   const loadRecentProjects = useCallback(async () => {
@@ -2407,8 +2422,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       .then(async (projects) => {
         if (cancelled) return;
         if (projects.length === 0) { newProject(); return; }
-        const opened = await openRecentProject(projects[0].path);
-        if (!opened) newProject();
+        const result = await openRecentProject(projects[0].path);
+        if (result === "failed") newProject();
       })
       .catch(() => { if (!cancelled) newProject(); });
     return () => { cancelled = true; };
@@ -3878,6 +3893,24 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <button className="candidate-secondary" onClick={() => setWindowChoice(null)}>取消</button>
               <button className="candidate-secondary" onClick={() => confirmWindowChoice(windowChoice, "current")}>当前窗口</button>
               <button className="primary-button" onClick={() => confirmWindowChoice(windowChoice, "new")}>新窗口</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {missingProject && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMissingProject(null); }}>
+          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="missing-project-title">
+            <span className="modal-kicker">PROJECT NOT FOUND</span>
+            <h3 id="missing-project-title">最近项目文件不存在或无法访问</h3>
+            <p className="settings-intro">
+              工程可能已被移动或删除（已从最近项目列表移除）。请选择接下来如何处理。
+            </p>
+            <p className="settings-intro mono-path">{missingProject.path}</p>
+            <div className="modal-actions">
+              <button className="candidate-secondary" onClick={() => setMissingProject(null)}>取消</button>
+              <button className="candidate-secondary" onClick={() => { setMissingProject(null); newProject(); }}>新建项目</button>
+              <button className="candidate-secondary" onClick={() => { setMissingProject(null); void handleOpenProject(); }}>打开项目</button>
+              <button className="primary-button" onClick={() => void magent?.closeWindow()}>关闭</button>
             </div>
           </section>
         </div>

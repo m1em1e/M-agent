@@ -968,6 +968,7 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 .settings-header h2 { margin: 6px 0 0; }
 .settings-pane { min-height: 0; overflow-y: auto; padding: 22px 32px 28px; }
 .settings-intro { margin: 0 0 4px; color: #7b817e; font-size: 10px; line-height: 1.6; }
+.settings-intro.mono-path { margin: 6px 0 2px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-input); color: #a7aca6; font: 10px "JetBrains Mono", monospace; word-break: break-all; }
 .settings-group { margin-bottom: 18px; padding: 15px; border: 1px solid #303536; border-radius: 7px; background: #141819; }
 .settings-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
 .settings-group-heading > div { display: grid; gap: 5px; }
