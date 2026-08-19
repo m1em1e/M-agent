@@ -3,7 +3,7 @@ import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
 import { selectSfzRegions } from "../../core/audio/sfz-parser.js";
-import type { MidiNote, MidiProject, MidiTrack, TickRange } from "../../shared/midi.js";
+import type { MidiNote, MidiProject, MidiTrack } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 导出音频格式。 */
@@ -19,8 +19,8 @@ export interface RenderProjectOptions {
   sampleRate: number;
   /** 渲染时长上限（秒），超限抛 ExportTooLongError。 */
   maxSeconds: number;
-  /** 仅导出该循环区内容（音符剪裁到区间并平移到 0 起算）；null/缺省渲染完整工程。 */
-  loopRegion?: TickRange | null;
+  /** 按各轨循环区导出：有循环区的轨道从头播放、进入循环区后循环至曲末；无循环区轨道整轨导出。 */
+  clipByTrackLoop?: boolean;
   /** 解析音源引用到可读取的条目（渲染进程内 findInstrumentEntry 逻辑）。 */
   resolveInstrument: (libraryId: string) => { path: string; enabled: boolean; sfzRegions?: SfzRegion[] } | undefined;
   /** 读取音源文件字节（SoundFont / SFZ 采样）。 */
@@ -72,20 +72,50 @@ export function exportDurationSeconds(endTick: number, ppq: number, tempo: numbe
 }
 
 /**
- * 将轨道音符剪裁到循环区并平移到 0 起算（区间外的音符丢弃，跨界音符截断）。
+ * 计算按各轨循环区导出时的末尾 tick：max(有循环区轨的循环区 endTick, 无循环区轨的笔记末尾)，
+ * mute/solo 规则与 computeAudibleEndTick 一致。
  */
-export function clipTracksToLoop(tracks: MidiTrack[], loop: TickRange): MidiTrack[] {
-  return tracks.map((track) => ({
-    ...track,
-    notes: track.notes
-      .map((note) => {
-        const start = Math.max(note.startTick, loop.startTick);
-        const end = Math.min(note.startTick + note.durationTicks, loop.endTick);
-        if (end <= start) return null;
-        return { ...note, startTick: start - loop.startTick, durationTicks: end - start };
-      })
-      .filter((note): note is MidiNote => note !== null),
-  }));
+export function computeLoopEndTick(tracks: MidiTrack[]): number {
+  const soloActive = tracks.some((track) => track.solo);
+  let maxTick = 0;
+  for (const track of tracks) {
+    if (track.muted || (soloActive && !track.solo)) continue;
+    if (track.loopRegion) {
+      maxTick = Math.max(maxTick, track.loopRegion.endTick);
+      continue;
+    }
+    for (const note of track.notes) {
+      maxTick = Math.max(maxTick, note.startTick + note.durationTicks);
+    }
+  }
+  return maxTick;
+}
+
+/**
+ * 按播放语义展开轨道：丢弃循环区外的音符，循环区内的音符从循环区起点开始
+ * 以周期（区间长度）重复，直到工程末尾 endTickTotal；循环区起点前保持静音。
+ * 无循环区的轨道原样保留（整轨导出）。
+ */
+export function expandTracksByLoop(tracks: MidiTrack[], endTickTotal: number): MidiTrack[] {
+  return tracks.map((track) => {
+    const loop = track.loopRegion;
+    if (!loop || loop.endTick <= loop.startTick) return track;
+    const period = loop.endTick - loop.startTick;
+    const inner = track.notes.flatMap((note) => {
+      const start = Math.max(note.startTick, loop.startTick);
+      const end = Math.min(note.startTick + note.durationTicks, loop.endTick);
+      if (end <= start) return [];
+      return [{ ...note, startTick: start, durationTicks: end - start }];
+    });
+    if (inner.length === 0) return { ...track, notes: [] };
+    const notes: MidiNote[] = [];
+    for (let offset = 0; loop.startTick + offset < endTickTotal; offset += period) {
+      for (const note of inner) {
+        notes.push({ ...note, id: `${note.id}-${offset}`, startTick: note.startTick + offset });
+      }
+    }
+    return { ...track, notes };
+  });
 }
 
 /**
@@ -94,9 +124,9 @@ export function clipTracksToLoop(tracks: MidiTrack[], loop: TickRange): MidiTrac
  */
 export async function renderProjectToBuffer(options: RenderProjectOptions): Promise<AudioBuffer> {
   const { tracks, ppq, tempo, sampleRate, maxSeconds } = options;
-  const loop = options.loopRegion ?? null;
-  const renderTracks = loop ? clipTracksToLoop(tracks, loop) : tracks;
-  const endTick = loop ? loop.endTick - loop.startTick : computeAudibleEndTick(tracks);
+  const loopEndTick = options.clipByTrackLoop ? computeLoopEndTick(tracks) : null;
+  const renderTracks = loopEndTick !== null ? expandTracksByLoop(tracks, loopEndTick) : tracks;
+  const endTick = loopEndTick ?? computeAudibleEndTick(tracks);
   const durationSeconds = exportDurationSeconds(endTick, ppq, tempo);
   if (durationSeconds > maxSeconds) throw new ExportTooLongError(durationSeconds, maxSeconds);
   const frames = Math.ceil(durationSeconds * sampleRate);

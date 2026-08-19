@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  clipTracksToLoop,
   computeAudibleEndTick,
+  computeLoopEndTick,
+  expandTracksByLoop,
   exportDurationSeconds,
   tickToSeconds,
   ExportTooLongError,
@@ -58,25 +59,56 @@ describe("render-project helpers", () => {
     expect(error.message).toContain("60 秒");
   });
 
-  it("clips and shifts notes to the loop region", () => {
+  it("computes the loop end tick as max of loop ends and plain track ends", () => {
+    const looped = track({
+      loopRegion: { startTick: 480, endTick: 1920 },
+      notes: [{ id: "nl", pitch: 60, startTick: 600, durationTicks: 480, velocity: 90 }],
+    });
+    const plain = track({ notes: [{ id: "np", pitch: 60, startTick: 0, durationTicks: 1440, velocity: 90 }] });
+    expect(computeLoopEndTick([looped, plain])).toBe(1920);
+    expect(computeLoopEndTick([looped])).toBe(1920);
+    expect(computeLoopEndTick([plain])).toBe(1440);
+  });
+
+  it("honors mute and solo in loop end tick", () => {
+    const looped = track({ loopRegion: { startTick: 0, endTick: 960 }, notes: [] });
+    const muted = track({ muted: true, loopRegion: { startTick: 0, endTick: 10000 }, notes: [] });
+    const plain = track({ notes: [{ id: "np", pitch: 60, startTick: 0, durationTicks: 480, velocity: 90 }] });
+    expect(computeLoopEndTick([looped, muted, plain])).toBe(960);
+    const solo = track({ solo: true, loopRegion: { startTick: 0, endTick: 120 }, notes: [] });
+    expect(computeLoopEndTick([looped, plain, solo])).toBe(120);
+  });
+
+  it("expands loop notes repeatedly from the loop start to the project end", () => {
     const melody = track({
+      loopRegion: { startTick: 480, endTick: 1920 },
       notes: [
         { id: "inside", pitch: 60, startTick: 600, durationTicks: 480, velocity: 90 },
         { id: "before", pitch: 62, startTick: 100, durationTicks: 480, velocity: 90 },
-        { id: "after", pitch: 64, startTick: 2400, durationTicks: 480, velocity: 90 },
         { id: "cross", pitch: 66, startTick: 1500, durationTicks: 960, velocity: 90 },
       ],
     });
-    const clipped = clipTracksToLoop([melody], { startTick: 480, endTick: 1920 });
-    expect(clipped[0].notes.map((note) => note.id)).toEqual(["inside", "before", "cross"]);
-    expect(clipped[0].notes[0]).toMatchObject({ startTick: 120, durationTicks: 480 });
-    expect(clipped[0].notes[1]).toMatchObject({ startTick: 0, durationTicks: 100 });
-    expect(clipped[0].notes[2]).toMatchObject({ startTick: 1020, durationTicks: 420 });
+    const expanded = expandTracksByLoop([melody], 3840)[0].notes;
+    expect(expanded).toHaveLength(9);
+    expect(expanded.map((note) => note.startTick)).toEqual([600, 480, 1500, 2040, 1920, 2940, 3480, 3360, 4380]);
+    expect(expanded[0]).toMatchObject({ id: "inside-0", startTick: 600, durationTicks: 480 });
+    expect(expanded[1]).toMatchObject({ id: "before-0", startTick: 480, durationTicks: 100 });
+    expect(expanded[2]).toMatchObject({ id: "cross-0", startTick: 1500, durationTicks: 420 });
+    expect(expanded[5]).toMatchObject({ id: "cross-1440", startTick: 2940, durationTicks: 420 });
   });
 
-  it("drops tracks with no notes inside the loop", () => {
-    const empty = track({ notes: [{ id: "n", pitch: 60, startTick: 0, durationTicks: 10, velocity: 90 }] });
-    const clipped = clipTracksToLoop([empty], { startTick: 480, endTick: 1920 });
-    expect(clipped[0].notes).toHaveLength(0);
+  it("keeps tracks without a loop region untouched", () => {
+    const plain = track({ notes: [{ id: "np", pitch: 60, startTick: 0, durationTicks: 1440, velocity: 90 }] });
+    const result = expandTracksByLoop([plain], 1920);
+    expect(result[0]).toBe(plain);
+  });
+
+  it("empties loop tracks whose notes all fall outside the loop", () => {
+    const empty = track({
+      loopRegion: { startTick: 480, endTick: 1920 },
+      notes: [{ id: "n", pitch: 60, startTick: 0, durationTicks: 10, velocity: 90 }],
+    });
+    const expanded = expandTracksByLoop([empty], 3840);
+    expect(expanded[0].notes).toHaveLength(0);
   });
 });

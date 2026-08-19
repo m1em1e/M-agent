@@ -2246,7 +2246,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         tempo,
         sampleRate,
         maxSeconds: exportSettings.maxMinutes * 60,
-        loopRegion: exportLoopOnly ? (projectMetadata?.loopRegion ?? null) : null,
+        clipByTrackLoop: exportLoopOnly,
         resolveInstrument: (libraryId) => {
           const entry = findInstrumentEntry(libraryId);
           return entry ? { path: entry.path, enabled: entry.enabled, sfzRegions: entry.sfzRegions } : undefined;
@@ -3900,9 +3900,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <label className="settings-row">
               <div>
                 <strong>仅导出循环区</strong>
-                <span>只渲染工程级循环区（标尺虚线框）范围内的内容，需先通过 Agent 设置循环区。</span>
+                <span>有循环区的轨道从头播放、进入循环区后循环至曲末；无循环区轨道整轨导出。</span>
               </div>
-              <input type="checkbox" checked={exportLoopOnly} disabled={!projectMetadata?.loopRegion} onChange={(event) => setExportLoopOnly(event.target.checked)} />
+              <input type="checkbox" checked={exportLoopOnly} onChange={(event) => setExportLoopOnly(event.target.checked)} />
             </label>
             <div className="modal-actions">
               <button className="candidate-secondary" disabled={exportBusy} onClick={() => setExportDialog(null)}>取消</button>
