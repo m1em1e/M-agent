@@ -1362,6 +1362,15 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
 
     const soloActive = tracks.some((track) => track.solo);
+    // 选中轨道尚无循环区时，在标尺右端提示创建方式。
+    if (selectedTrackId && !tracks.some((track) => track.id === selectedTrackId && track.loopRegion)) {
+      context.fillStyle = "rgba(141,146,144,.75)";
+      context.font = "10px ui-monospace, monospace";
+      context.textBaseline = "middle";
+      context.textAlign = "right";
+      context.fillText("← 在标尺拖拽，为选中轨道创建循环区", canvasWidth - 8, 15);
+      context.textAlign = "left";
+    }
     // 选中轨道的循环区在音符区以淡色列提示。
     const selectedLoop = tracks.find((track) => track.id === selectedTrackId)?.loopRegion;
     if (selectedLoop) {
