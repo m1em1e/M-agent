@@ -1674,18 +1674,15 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const tickAtX = (x: number) => Math.round(((x - KEY_WIDTH) / beatWidth) * projectPpq / gridTicks) * gridTicks;
   const pitchAtY = (y: number) => clamp(MAX_PITCH - Math.floor((y - RULER_HEIGHT) / ROW_HEIGHT), MIN_PITCH, MAX_PITCH);
 
-  /** 命中 x 处最上层的轨道循环带（选中轨道优先，其余按绘制顺序倒序）。 */
+  /** 命中 x 处选中轨道的循环带（非选中轨道循环为纯展示，不可编辑）。 */
   const loopBandAt = (x: number): { track: MidiTrack; range: TickRange; hit: "resize-start" | "resize-end" | "move" } | null => {
-    const selected = tracks.find((track) => track.id === selectedTrackId);
-    const others = tracks.filter((track) => track.id !== selectedTrackId).reverse();
-    for (const track of [...(selected ? [selected] : []), ...others]) {
-      if (!track.loopRegion) continue;
-      const startPx = KEY_WIDTH + (track.loopRegion.startTick / projectPpq) * beatWidth;
-      const endPx = KEY_WIDTH + (track.loopRegion.endTick / projectPpq) * beatWidth;
-      const hit = hitLoopBand(startPx, endPx, x);
-      if (hit) return { track, range: track.loopRegion, hit };
-    }
-    return null;
+    const track = tracks.find((item) => item.id === selectedTrackId);
+    if (!track?.loopRegion) return null;
+    const startPx = KEY_WIDTH + (track.loopRegion.startTick / projectPpq) * beatWidth;
+    const endPx = KEY_WIDTH + (track.loopRegion.endTick / projectPpq) * beatWidth;
+    const hit = hitLoopBand(startPx, endPx, x);
+    if (!hit) return null;
+    return { track, range: track.loopRegion, hit };
   };
 
   const onCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -1825,9 +1822,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const y = event.clientY - rect.top;
     if (y >= RULER_HEIGHT || x <= KEY_WIDTH) return;
     const band = loopBandAt(x);
-    if (!band) return;
-    event.preventDefault();
-    if (band.track.loopRegion) {
+    if (band && band.track.loopRegion) {
+      event.preventDefault();
       setPast((history) => [...history.slice(-39), {
         ...editorStateRef.current,
         tracks: cloneTracks(tracks).map((track) => track.id === band.track.id ? { ...track, loopRegion: null } : track),
@@ -1835,6 +1831,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       setTracks(tracks.map((track) => track.id === band.track.id ? { ...track, loopRegion: null } : track));
       setFuture([]);
       setCandidates([]);
+      return;
+    }
+    const projectLoop = projectMetadata?.loopRegion;
+    if (projectLoop) {
+      const startX = KEY_WIDTH + (projectLoop.startTick / projectPpq) * beatWidth;
+      const endX = KEY_WIDTH + (projectLoop.endTick / projectPpq) * beatWidth;
+      if (x >= startX && x <= endX) {
+        event.preventDefault();
+        setPast((history) => [...history.slice(-39), { ...editorStateRef.current, loopRegion: null }]);
+        setProjectMetadata((current) => current ? { ...current, loopRegion: null } : current);
+        setFuture([]);
+        setCandidates([]);
+      }
     }
   };
 
