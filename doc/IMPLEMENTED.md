@@ -184,7 +184,24 @@
   `exportBusy` 忙碌态与 toast。
 - **设置**：通用 → 导出 → 渲染时长上限（默认 10 分钟，本机持久化 `magent.export.v1`）。
 
-## 11. 验证记录
+## 11. 每音轨循环区与分层循环播放（2026-08-19）
+
+- **数据模型**：`MidiTrack`/`TrackInput`/`RendererTrack` 新增可选 `loopRegion?: TickRange | null`（缺省=不循环）；
+  `createMidiTrack`/`cloneMidiProject`（深拷贝）/`rendererPayloadToProject` 透传；`validateTrack` 新增轨道级
+  循环校验（`INVALID_TRACK_LOOP`）；`project-version.ts` 轨道哈希纳入循环区；`.magent` 双向兼容（旧文件无字段=无循环，
+  新文件对旧版为被忽略的可选字段）。
+- **标尺交互**（`src/renderer/loop-ruler.ts` 纯函数 + canvas）：各轨循环带以轨道色显示在标尺（选中轨道描边），
+  工程级循环区以虚线框区分（Agent 专属，仅可右键删除）；空白处拖拽（>3px 判定）在**选中轨道**上创建循环，
+  无选中轨道时禁止创建；循环带左/右 6px 边缘缩放、中部整体移动（网格吸附）；**右键点击删除**；
+  **拖动到反向（起点越过终点）清除**，两种删除都支持；创建取消时还原原状态；全程乐观更新 + 撤销快照。
+- **分层循环播放**：播放改为绝对 tick 周期触发——有循环区的轨道只重复区间内音符（周期=区间长度，起点前静音），
+  无循环轨道以整曲为周期（行为不变）；`setPlayhead(tick % maxTick)` 仅影响显示。
+- **仅导出循环区**：导出对话框新增「仅导出循环区」复选框（工程级循环区存在时可勾选）；
+  `clipTracksToLoop` 把音符剪裁/平移到循环区间（区间外丢弃、跨界截断），时长=区间长度+释放尾音。
+- **Agent 约定**：context-prompt 告知轨道级 `loopRegion` 是用户界面管理的分层循环数据，Agent 不得创建/修改/清除。
+- 测试：`tests/renderer/loop-ruler.test.ts`（11 用例）+ project-adapter/project/project-version/render-project 各补循环区用例。
+
+## 12. 验证记录
 
 - `npm run typecheck`、`npm test`（35 文件 / 181 项通过）、`npm run build`、`npm run test:electron` 均通过。
 - 音频导出专项验证：Phase 0 在真实 Electron 里验证 `WorkletSynthesizer` + `OfflineAudioContext` 时序正确

@@ -98,6 +98,30 @@ describe("main-process project payload boundary", () => {
     })).not.toThrow();
   });
 
+  it("preserves per-track loop regions across the renderer boundary", () => {
+    const project = rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{ ...rendererProject.tracks[0], loopRegion: { startTick: 480, endTick: 1920 } }],
+    });
+    expect(project.tracks[0].loopRegion).toEqual({ startTick: 480, endTick: 1920 });
+    const withoutLoop = rendererPayloadToProject(rendererProject);
+    expect(withoutLoop.tracks[0].loopRegion).toBeUndefined();
+  });
+
+  it("rejects malformed per-track loop regions", () => {
+    expect(() => rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{
+        ...rendererProject.tracks[0],
+        loopRegion: { startTick: "x", endTick: 1920 },
+      } as unknown as typeof rendererProject.tracks[0]],
+    })).toThrow(/轨道循环区无效/);
+    expect(() => rendererPayloadToProject({
+      ...rendererProject,
+      tracks: [{ ...rendererProject.tracks[0], loopRegion: { startTick: 1920, endTick: 480 } }],
+    })).toThrow(/Track loop end must be after a non-negative start tick/);
+  });
+
   it("rejects malformed nested project metadata", () => {
     const normalized = rendererPayloadToProject(rendererProject);
     expect(() => assertProjectFile({ ...normalized, tempoMap: [null] })).toThrow(/速度图/);

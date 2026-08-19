@@ -38,6 +38,7 @@ export function rendererPayloadToProject(payload: RendererProjectPayload): MidiP
       solo: track.solo,
       volume: track.volume,
       instrument: track.instrument,
+      loopRegion: track.loopRegion,
       notes: track.notes,
     }),
   );
@@ -151,6 +152,10 @@ function assertTrackShapes(tracks: unknown[], context: string): void {
     }
     if (value.instrument != null && !isInstrumentReference(value.instrument)) {
       throw new Error(`${context}的第 ${trackIndex + 1} 条轨道音源引用无效。`);
+    }
+    if (value.loopRegion !== undefined && value.loopRegion !== null
+      && !hasNumbers(value.loopRegion, "startTick", "endTick")) {
+      throw new Error(`${context}的第 ${trackIndex + 1} 条轨道循环区无效。`);
     }
     noteCount += value.notes.length;
     if (noteCount > 200_000) throw new Error(`${context}的音符数量超过上限。`);

@@ -63,7 +63,7 @@
 
 WAV / OGG(Vorbis) 音频导出已实现（见 IMPLEMENTED.md 第 10 节）。仍待完善：
 
-- 导出范围当前为**完整工程**；仅导出循环区（loopRegion）尚未支持。
+- 导出范围当前为**完整工程**；仅导出循环区（loopRegion）已支持（见 IMPLEMENTED.md）。
 - 渲染速度使用与播放一致的单一速度，未按工程 tempoMap 的多段速度映射导出。
 - 真实 SoundFont/SFZ 混排工程的导出已在本机端到端验证；多音源库（同一工程多个 SoundFont）与跨平台桌面导出手测未覆盖。
 

@@ -3,6 +3,7 @@ import {
   ChangeSetValidationError,
   MidiTransactionHistory,
   applyChangeSet,
+  cloneMidiProject,
   createMidiProject,
   validateChangeSet,
 } from "../../src/core/midi";
@@ -164,6 +165,36 @@ describe("MIDI project edits", () => {
       velocity: 96,
     });
     expect(updated.timeSignatures[1]).toEqual({ tick: 480, numerator: 3, denominator: 4 });
+  });
+
+  it("carries a per-track loop region through create_track and cloning", () => {
+    const project = createMidiProject({ id: "project", idFactory: sequentialIds() });
+    const applied = applyChangeSet(project, {
+      id: "loop",
+      summary: "Loop layer",
+      operations: [{
+        type: "create_track",
+        track: { id: "drums", name: "Drums", role: "drums", channel: 9, loopRegion: { startTick: 0, endTick: 1920 } },
+      }],
+    }, { idFactory: sequentialIds() }).project;
+    expect(applied.tracks[0].loopRegion).toEqual({ startTick: 0, endTick: 1920 });
+
+    const cloned = cloneMidiProject(applied);
+    cloned.tracks[0].loopRegion!.endTick = 3840;
+    expect(applied.tracks[0].loopRegion!.endTick).toBe(1920);
+  });
+
+  it("rejects invalid per-track loop regions during change-set validation", () => {
+    const project = createMidiProject({ id: "project", idFactory: sequentialIds() });
+    const reversed = {
+      id: "bad-loop",
+      summary: "Bad loop",
+      operations: [{
+        type: "create_track" as const,
+        track: { id: "t", name: "T", loopRegion: { startTick: 1920, endTick: 480 } },
+      }],
+    };
+    expect(validateChangeSet(project, reversed).valid).toBe(false);
   });
 });
 

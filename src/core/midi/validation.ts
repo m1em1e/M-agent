@@ -57,6 +57,17 @@ export function validateTrack(track: MidiTrack, path = "track"): ValidationIssue
     }
     noteIds.add(note.id);
   });
+  if (
+    track.loopRegion &&
+    (!Number.isInteger(track.loopRegion.startTick) ||
+      track.loopRegion.startTick < 0 ||
+      !Number.isInteger(track.loopRegion.endTick) ||
+      track.loopRegion.endTick <= track.loopRegion.startTick)
+  ) {
+    issues.push(
+      error("INVALID_TRACK_LOOP", "Track loop end must be after a non-negative start tick.", `${path}.loopRegion`),
+    );
+  }
   return issues;
 }
 

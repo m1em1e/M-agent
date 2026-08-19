@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeAudibleEndTick, exportDurationSeconds, tickToSeconds, ExportTooLongError } from "../../src/renderer/audio/render-project";
+import {
+  clipTracksToLoop,
+  computeAudibleEndTick,
+  exportDurationSeconds,
+  tickToSeconds,
+  ExportTooLongError,
+} from "../../src/renderer/audio/render-project";
 import type { MidiTrack } from "../../src/shared/midi";
 
 function track(overrides: Partial<MidiTrack>): MidiTrack {
@@ -50,5 +56,27 @@ describe("render-project helpers", () => {
     const error = new ExportTooLongError(600.5, 60);
     expect(error.message).toContain("600.5 秒");
     expect(error.message).toContain("60 秒");
+  });
+
+  it("clips and shifts notes to the loop region", () => {
+    const melody = track({
+      notes: [
+        { id: "inside", pitch: 60, startTick: 600, durationTicks: 480, velocity: 90 },
+        { id: "before", pitch: 62, startTick: 100, durationTicks: 480, velocity: 90 },
+        { id: "after", pitch: 64, startTick: 2400, durationTicks: 480, velocity: 90 },
+        { id: "cross", pitch: 66, startTick: 1500, durationTicks: 960, velocity: 90 },
+      ],
+    });
+    const clipped = clipTracksToLoop([melody], { startTick: 480, endTick: 1920 });
+    expect(clipped[0].notes.map((note) => note.id)).toEqual(["inside", "before", "cross"]);
+    expect(clipped[0].notes[0]).toMatchObject({ startTick: 120, durationTicks: 480 });
+    expect(clipped[0].notes[1]).toMatchObject({ startTick: 0, durationTicks: 100 });
+    expect(clipped[0].notes[2]).toMatchObject({ startTick: 1020, durationTicks: 420 });
+  });
+
+  it("drops tracks with no notes inside the loop", () => {
+    const empty = track({ notes: [{ id: "n", pitch: 60, startTick: 0, durationTicks: 10, velocity: 90 }] });
+    const clipped = clipTracksToLoop([empty], { startTick: 480, endTick: 1920 });
+    expect(clipped[0].notes).toHaveLength(0);
   });
 });

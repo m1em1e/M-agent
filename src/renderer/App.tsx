@@ -28,6 +28,7 @@ import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument }
 import { buildProjectInstruments } from "../shared/instrument";
 import type { SkillTraceEntry } from "../core/agent/skills/types";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu";
+import { hitLoopBand, LOOP_HANDLE_HEIGHT, loopRangeFromDrag, resizedLoopEnd, resizedLoopStart, shiftedLoopRange } from "./loop-ruler";
 import { AudioEngine } from "./audio/audio-engine";
 import { MarkdownContent } from "./markdown";
 import {
@@ -120,6 +121,7 @@ interface MidiTrack {
   solo: boolean;
   volume?: number;
   instrument?: InstrumentReference;
+  loopRegion?: TickRange | null;
   notes: MidiNote[];
 }
 
@@ -152,7 +154,7 @@ interface ChatMessage {
   skillTrace?: SkillTraceEntry[];
 }
 
-interface DragState {
+interface NoteDragState {
   kind: "move" | "resize";
   noteId: string;
   startX: number;
@@ -160,6 +162,19 @@ interface DragState {
   original: MidiNote;
   base: MidiTrack[];
 }
+
+interface LoopDragState {
+  kind: "loop-create" | "loop-move" | "loop-resize-start" | "loop-resize-end";
+  /** 拖拽开始时指针所在 tick（网格吸附）。 */
+  startTick: number;
+  /** 拖拽前该轨道的循环区（create 时可能是 null，用于取消时还原）。 */
+  original: TickRange | null;
+  /** 拖拽目标轨道（创建必须有选中轨道，编辑为被命中的轨道）。 */
+  trackId: string;
+  base: MidiTrack[];
+}
+
+type DragState = NoteDragState | LoopDragState;
 
 interface WorkspaceResizeState {
   pane: WorkspacePane;
@@ -412,6 +427,7 @@ const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.ma
   solo: track.solo,
   volume: track.volume ?? 1,
   instrument: track.instrument,
+  loopRegion: track.loopRegion,
   notes: track.notes.map((note) => ({ ...note })),
 }));
 
@@ -572,6 +588,7 @@ function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet):
           solo: input.solo ?? false,
           volume: input.volume,
           instrument: input.instrument ?? undefined,
+          loopRegion: input.loopRegion,
           notes: (input.notes ?? []).map((note) => ({
             id: note.id ?? uid("agent-note"),
             pitch: note.pitch,
@@ -791,6 +808,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [exportSettings, setExportSettings] = useState<ExportSettings>(loadExportSettings);
   const [exportDialog, setExportDialog] = useState<null | ExportAudioFormat>(null);
   const [exportSampleRate, setExportSampleRate] = useState<ExportSampleRate>(DEFAULT_EXPORT_SAMPLE_RATE);
+  const [exportLoopOnly, setExportLoopOnly] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [shellPath, setShellPath] = useState(DEFAULT_SHELL_SETTINGS.path);
   const [shellCheck, setShellCheck] = useState<ShellCheckResult | null>(null);
@@ -843,6 +861,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const startTickRef = useRef(0);
   const lastTickRef = useRef(0);
   const currentPlayheadRef = useRef(0);
+  /** 标尺空白处按下后等待移动判定的「创建循环」候选（移动超阈值才生效）。 */
+  const pendingLoopCreateRef = useRef<{ tick: number; x: number; trackId: string; base: MidiTrack[] } | null>(null);
   // 实时思考流相关
   const runMessageIdRef = useRef<string>("");
   const liveThinkingRef = useRef("");
@@ -1267,6 +1287,34 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     context.fillStyle = themeColor("--canvas-key-bed", "#101214");
     context.fillRect(0, RULER_HEIGHT, KEY_WIDTH, CANVAS_HEIGHT - RULER_HEIGHT);
 
+    // 标尺循环带：各轨循环区（轨道色，选中轨道描边）；工程级循环区仅虚线框（Agent 专属，不可拖拽编辑）。
+    for (const track of tracks) {
+      if (!track.loopRegion) continue;
+      const startX = KEY_WIDTH + (track.loopRegion.startTick / projectPpq) * beatWidth;
+      const endX = KEY_WIDTH + (track.loopRegion.endTick / projectPpq) * beatWidth;
+      const isActive = track.id === selectedTrackId;
+      context.globalAlpha = isActive ? 0.85 : 0.45;
+      context.fillStyle = track.color;
+      context.fillRect(startX, 0, endX - startX, RULER_HEIGHT);
+      context.globalAlpha = isActive ? 1 : 0.75;
+      context.fillRect(startX, 0, endX - startX, LOOP_HANDLE_HEIGHT);
+      context.globalAlpha = 1;
+      if (isActive) {
+        context.strokeStyle = "rgba(255,255,255,.75)";
+        context.lineWidth = 1;
+        context.strokeRect(startX + 0.5, 0.5, endX - startX - 1, RULER_HEIGHT - 1);
+      }
+    }
+    if (projectMetadata?.loopRegion) {
+      const startX = KEY_WIDTH + (projectMetadata.loopRegion.startTick / projectPpq) * beatWidth;
+      const endX = KEY_WIDTH + (projectMetadata.loopRegion.endTick / projectPpq) * beatWidth;
+      context.strokeStyle = "rgba(200,204,208,.55)";
+      context.setLineDash([4, 3]);
+      context.lineWidth = 1;
+      context.strokeRect(startX + 0.5, 0.5, endX - startX - 1, RULER_HEIGHT - 1);
+      context.setLineDash([]);
+    }
+
     for (let pitch = MAX_PITCH; pitch >= MIN_PITCH; pitch -= 1) {
       const y = RULER_HEIGHT + (MAX_PITCH - pitch) * ROW_HEIGHT;
       context.fillStyle = isBlackKey(pitch)
@@ -1314,6 +1362,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
 
     const soloActive = tracks.some((track) => track.solo);
+    // 选中轨道的循环区在音符区以淡色列提示。
+    const selectedLoop = tracks.find((track) => track.id === selectedTrackId)?.loopRegion;
+    if (selectedLoop) {
+      const bgX = KEY_WIDTH + (selectedLoop.startTick / projectPpq) * beatWidth;
+      const bgW = Math.max(0, ((selectedLoop.endTick - selectedLoop.startTick) / projectPpq) * beatWidth);
+      context.fillStyle = "rgba(255,255,255,.03)";
+      context.fillRect(bgX, RULER_HEIGHT, bgW, CANVAS_HEIGHT - RULER_HEIGHT);
+    }
     for (const track of tracks) {
       const active = track.id === selectedTrackId;
       const audible = !track.muted && (!soloActive || track.solo);
@@ -1353,7 +1409,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     context.lineTo(playheadX, 7);
     context.closePath();
     context.fill();
-  }, [appearance, beatWidth, canvasWidth, dpr, playhead, projectPpq, selectedNoteId, selectedTrackId, tracks]);
+  }, [appearance, beatWidth, canvasWidth, dpr, playhead, projectMetadata, projectPpq, selectedNoteId, selectedTrackId, tracks]);
 
   useEffect(drawCanvas, [drawCanvas]);
 
@@ -1560,25 +1616,26 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     let frame = 0;
     const update = (now: number) => {
       const elapsed = now - startedAtRef.current;
-      let tick = startTickRef.current + elapsed * ((tempo * projectPpq) / 60000);
-      if (tick >= maxTick) {
-        tick %= maxTick;
-        startedAtRef.current = now;
-        startTickRef.current = tick;
-        lastTickRef.current = 0;
-      }
+      const tick = startTickRef.current + elapsed * ((tempo * projectPpq) / 60000);
       const previous = lastTickRef.current;
       const soloActive = tracks.some((track) => track.solo);
       tracks.forEach((track) => {
         if (track.muted || (soloActive && !track.solo)) return;
-        track.notes.forEach((note) => {
-          if (note.startTick >= previous && note.startTick < tick) {
+        const loop = track.loopRegion ?? null;
+        // 分层循环：有循环区的轨道按自身周期重复区间内音符，其余轨道以整曲为周期。
+        const period = loop ? loop.endTick - loop.startTick : maxTick;
+        for (const note of track.notes) {
+          if (loop && (note.startTick < loop.startTick || note.startTick >= loop.endTick)) continue;
+          const triggerTick = previous < note.startTick
+            ? note.startTick
+            : note.startTick + (Math.floor((previous - note.startTick) / period) + 1) * period;
+          if (triggerTick > previous && triggerTick <= tick) {
             void playTrackNote(track, note, Math.min(8000, (note.durationTicks / projectPpq) * (60000 / tempo)));
           }
-        });
+        }
       });
       lastTickRef.current = tick;
-      setPlayhead(tick);
+      setPlayhead(tick % maxTick);
       frame = requestAnimationFrame(update);
     };
     frame = requestAnimationFrame(update);
@@ -1608,10 +1665,44 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const tickAtX = (x: number) => Math.round(((x - KEY_WIDTH) / beatWidth) * projectPpq / gridTicks) * gridTicks;
   const pitchAtY = (y: number) => clamp(MAX_PITCH - Math.floor((y - RULER_HEIGHT) / ROW_HEIGHT), MIN_PITCH, MAX_PITCH);
 
+  /** 命中 x 处最上层的轨道循环带（选中轨道优先，其余按绘制顺序倒序）。 */
+  const loopBandAt = (x: number): { track: MidiTrack; range: TickRange; hit: "resize-start" | "resize-end" | "move" } | null => {
+    const selected = tracks.find((track) => track.id === selectedTrackId);
+    const others = tracks.filter((track) => track.id !== selectedTrackId).reverse();
+    for (const track of [...(selected ? [selected] : []), ...others]) {
+      if (!track.loopRegion) continue;
+      const startPx = KEY_WIDTH + (track.loopRegion.startTick / projectPpq) * beatWidth;
+      const endPx = KEY_WIDTH + (track.loopRegion.endTick / projectPpq) * beatWidth;
+      const hit = hitLoopBand(startPx, endPx, x);
+      if (hit) return { track, range: track.loopRegion, hit };
+    }
+    return null;
+  };
+
   const onCanvasPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const { x, y } = canvasPoint(event);
     if (y < RULER_HEIGHT && x > KEY_WIDTH) {
-      setPlayhead(clamp((x - KEY_WIDTH) / beatWidth * projectPpq, 0, barCount * BEATS_PER_BAR * projectPpq));
+      if (event.button === 0) {
+        const band = loopBandAt(x);
+        if (band) {
+          const kind = band.hit === "resize-start" ? "loop-resize-start"
+            : band.hit === "resize-end" ? "loop-resize-end" : "loop-move";
+          setDrag({
+            kind,
+            startTick: tickAtX(x),
+            original: { ...band.range },
+            trackId: band.track.id,
+            base: cloneTracks(tracks),
+          });
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
+        setPlayhead(clamp((x - KEY_WIDTH) / beatWidth * projectPpq, 0, barCount * BEATS_PER_BAR * projectPpq));
+        if (selectedTrackId) {
+          pendingLoopCreateRef.current = { tick: tickAtX(x), x, trackId: selectedTrackId, base: cloneTracks(tracks) };
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }
+      }
       return;
     }
     if (x <= KEY_WIDTH || y <= RULER_HEIGHT || !selectedTrack) return;
@@ -1649,27 +1740,65 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   };
 
   const onCanvasPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (!drag) return;
     const { x, y } = canvasPoint(event);
-    const deltaTicks = Math.round((((x - drag.startX) / beatWidth) * projectPpq) / gridTicks) * gridTicks;
-    const deltaPitch = -Math.round((y - drag.startY) / ROW_HEIGHT);
-    setTracks(drag.base.map((track) => ({
+    if (!drag && pendingLoopCreateRef.current) {
+      const pending = pendingLoopCreateRef.current;
+      if (Math.abs(x - pending.x) > 3) {
+        pendingLoopCreateRef.current = null;
+        setDrag({
+          kind: "loop-create",
+          startTick: pending.tick,
+          original: pending.base.find((track) => track.id === pending.trackId)?.loopRegion ?? null,
+          trackId: pending.trackId,
+          base: pending.base,
+        });
+      } else {
+        return;
+      }
+    }
+    if (!drag) return;
+    const activeDrag = drag;
+    switch (activeDrag.kind) {
+      case "loop-create":
+      case "loop-move":
+      case "loop-resize-start":
+      case "loop-resize-end": {
+        const currentTick = tickAtX(x);
+        const range = activeDrag.kind === "loop-create"
+          ? loopRangeFromDrag(activeDrag.startTick, currentTick) ?? activeDrag.original
+          : activeDrag.kind === "loop-move"
+            ? shiftedLoopRange(activeDrag.original as TickRange, currentTick - activeDrag.startTick)
+            : activeDrag.kind === "loop-resize-start"
+              ? resizedLoopStart(activeDrag.original as TickRange, currentTick)
+              : resizedLoopEnd(activeDrag.original as TickRange, currentTick);
+        setTracks(activeDrag.base.map((track) => track.id === activeDrag.trackId ? { ...track, loopRegion: range } : track));
+        return;
+      }
+    }
+    const deltaTicks = Math.round((((x - activeDrag.startX) / beatWidth) * projectPpq) / gridTicks) * gridTicks;
+    const deltaPitch = -Math.round((y - activeDrag.startY) / ROW_HEIGHT);
+    setTracks(activeDrag.base.map((track) => ({
       ...track,
       notes: track.notes.map((note) => {
-        if (note.id !== drag.noteId) return note;
-        if (drag.kind === "resize") {
-          return { ...note, durationTicks: Math.max(gridTicks, drag.original.durationTicks + deltaTicks) };
+        if (note.id !== activeDrag.noteId) return note;
+        if (activeDrag.kind === "resize") {
+          return { ...note, durationTicks: Math.max(gridTicks, activeDrag.original.durationTicks + deltaTicks) };
         }
         return {
           ...note,
-          startTick: Math.max(0, drag.original.startTick + deltaTicks),
-          pitch: clamp(drag.original.pitch + deltaPitch, MIN_PITCH, MAX_PITCH),
+          startTick: Math.max(0, activeDrag.original.startTick + deltaTicks),
+          pitch: clamp(activeDrag.original.pitch + deltaPitch, MIN_PITCH, MAX_PITCH),
         };
       }),
     })));
   };
 
   const onCanvasPointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (pendingLoopCreateRef.current) {
+      pendingLoopCreateRef.current = null;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+      return;
+    }
     if (!drag) return;
     setPast((history) => [...history.slice(-39), {
       ...editorStateRef.current,
@@ -1679,6 +1808,25 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setCandidates([]);
     setDrag(null);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const onCanvasContextMenu = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    if (y >= RULER_HEIGHT || x <= KEY_WIDTH) return;
+    const band = loopBandAt(x);
+    if (!band) return;
+    event.preventDefault();
+    if (band.track.loopRegion) {
+      setPast((history) => [...history.slice(-39), {
+        ...editorStateRef.current,
+        tracks: cloneTracks(tracks).map((track) => track.id === band.track.id ? { ...track, loopRegion: null } : track),
+      }]);
+      setTracks(tracks.map((track) => track.id === band.track.id ? { ...track, loopRegion: null } : track));
+      setFuture([]);
+      setCandidates([]);
+    }
   };
 
   const onCanvasDoubleClick = (event: ReactMouseEvent<HTMLCanvasElement>) => {
@@ -2073,6 +2221,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         tempo,
         sampleRate,
         maxSeconds: exportSettings.maxMinutes * 60,
+        loopRegion: exportLoopOnly ? (projectMetadata?.loopRegion ?? null) : null,
         resolveInstrument: (libraryId) => {
           const entry = findInstrumentEntry(libraryId);
           return entry ? { path: entry.path, enabled: entry.enabled, sfzRegions: entry.sfzRegions } : undefined;
@@ -2935,6 +3084,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               onPointerMove={onCanvasPointerMove}
               onPointerUp={onCanvasPointerUp}
               onPointerCancel={onCanvasPointerUp}
+              onContextMenu={onCanvasContextMenu}
               onDoubleClick={onCanvasDoubleClick}
             />
           </div>
@@ -3716,6 +3866,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <select value={exportSampleRate} onChange={(event) => setExportSampleRate(Number(event.target.value) as ExportSampleRate)}>
                 {EXPORT_SAMPLE_RATES.map((rate) => <option key={rate} value={rate}>{rate} Hz</option>)}
               </select>
+            </label>
+            <label className="settings-row">
+              <div>
+                <strong>仅导出循环区</strong>
+                <span>只渲染工程级循环区（标尺虚线框）范围内的内容，需先通过 Agent 设置循环区。</span>
+              </div>
+              <input type="checkbox" checked={exportLoopOnly} disabled={!projectMetadata?.loopRegion} onChange={(event) => setExportLoopOnly(event.target.checked)} />
             </label>
             <div className="modal-actions">
               <button className="candidate-secondary" disabled={exportBusy} onClick={() => setExportDialog(null)}>取消</button>

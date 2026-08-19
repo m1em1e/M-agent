@@ -51,4 +51,17 @@ describe("projectVersionOf", () => {
   it("changes when tempo changes", () => {
     expect(projectVersionOf({ ...base, tempo: 130 })).not.toBe(projectVersionOf(base));
   });
+
+  it("changes when a per-track loop region changes", () => {
+    const withLoop = {
+      ...base,
+      tracks: [{ ...base.tracks[0], loopRegion: { startTick: 480, endTick: 1920 } }],
+    };
+    const movedLoop = {
+      ...base,
+      tracks: [{ ...base.tracks[0], loopRegion: { startTick: 960, endTick: 1920 } }],
+    };
+    expect(projectVersionOf(withLoop)).not.toBe(projectVersionOf(base));
+    expect(projectVersionOf(movedLoop)).not.toBe(projectVersionOf(withLoop));
+  });
 });

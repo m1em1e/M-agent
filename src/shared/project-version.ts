@@ -12,6 +12,7 @@ export interface ProjectVersionTrackSource {
   program: number;
   muted: boolean;
   solo: boolean;
+  loopRegion?: { startTick: number; endTick: number } | null;
   notes: Array<{ id?: string; pitch: number; startTick: number; durationTicks: number; velocity: number }>;
 }
 
@@ -50,6 +51,7 @@ export function projectVersionOf(payload: ProjectVersionSource): string {
       program: track.program,
       muted: track.muted,
       solo: track.solo,
+      loopRegion: track.loopRegion ? { ...track.loopRegion } : track.loopRegion ?? undefined,
       notes: track.notes.map((note) => ({
         pitch: note.pitch,
         startTick: note.startTick,

@@ -39,6 +39,8 @@ export interface MidiTrack {
   volume?: number;
   /** 轨道音源引用（可序列化），缺省表示使用默认试听。 */
   instrument?: InstrumentReference;
+  /** 轨道级循环区（分层循环播放用）；缺省或 null 表示该轨不循环、播完整曲。 */
+  loopRegion?: TickRange | null;
 }
 
 export interface Revision {
@@ -99,6 +101,7 @@ export interface TrackInput {
   solo?: boolean;
   volume?: number;
   instrument?: InstrumentReference;
+  loopRegion?: TickRange | null;
   notes?: NoteInput[];
 }
 

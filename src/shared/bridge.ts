@@ -31,6 +31,7 @@ export interface RendererTrack {
   solo: boolean;
   volume?: number;
   instrument?: InstrumentReference;
+  loopRegion?: TickRange | null;
   notes: Array<{
     id: string;
     pitch: number;

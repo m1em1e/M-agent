@@ -3,7 +3,7 @@ import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
 import { selectSfzRegions } from "../../core/audio/sfz-parser.js";
-import type { MidiProject, MidiTrack } from "../../shared/midi.js";
+import type { MidiNote, MidiProject, MidiTrack, TickRange } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 导出音频格式。 */
@@ -19,6 +19,8 @@ export interface RenderProjectOptions {
   sampleRate: number;
   /** 渲染时长上限（秒），超限抛 ExportTooLongError。 */
   maxSeconds: number;
+  /** 仅导出该循环区内容（音符剪裁到区间并平移到 0 起算）；null/缺省渲染完整工程。 */
+  loopRegion?: TickRange | null;
   /** 解析音源引用到可读取的条目（渲染进程内 findInstrumentEntry 逻辑）。 */
   resolveInstrument: (libraryId: string) => { path: string; enabled: boolean; sfzRegions?: SfzRegion[] } | undefined;
   /** 读取音源文件字节（SoundFont / SFZ 采样）。 */
@@ -70,12 +72,31 @@ export function exportDurationSeconds(endTick: number, ppq: number, tempo: numbe
 }
 
 /**
+ * 将轨道音符剪裁到循环区并平移到 0 起算（区间外的音符丢弃，跨界音符截断）。
+ */
+export function clipTracksToLoop(tracks: MidiTrack[], loop: TickRange): MidiTrack[] {
+  return tracks.map((track) => ({
+    ...track,
+    notes: track.notes
+      .map((note) => {
+        const start = Math.max(note.startTick, loop.startTick);
+        const end = Math.min(note.startTick + note.durationTicks, loop.endTick);
+        if (end <= start) return null;
+        return { ...note, startTick: start - loop.startTick, durationTicks: end - start };
+      })
+      .filter((note): note is MidiNote => note !== null),
+  }));
+}
+
+/**
  * 离线渲染工程为 AudioBuffer。SoundFont 轨道经 SpessaSynth 离线序列（startOfflineRender）
  * 按时间精确渲染；SFZ 采样与振荡器轨道用标准 Web Audio 节点按绝对时间排程；各层最后混音。
  */
 export async function renderProjectToBuffer(options: RenderProjectOptions): Promise<AudioBuffer> {
   const { tracks, ppq, tempo, sampleRate, maxSeconds } = options;
-  const endTick = computeAudibleEndTick(tracks);
+  const loop = options.loopRegion ?? null;
+  const renderTracks = loop ? clipTracksToLoop(tracks, loop) : tracks;
+  const endTick = loop ? loop.endTick - loop.startTick : computeAudibleEndTick(tracks);
   const durationSeconds = exportDurationSeconds(endTick, ppq, tempo);
   if (durationSeconds > maxSeconds) throw new ExportTooLongError(durationSeconds, maxSeconds);
   const frames = Math.ceil(durationSeconds * sampleRate);
@@ -83,7 +104,7 @@ export async function renderProjectToBuffer(options: RenderProjectOptions): Prom
   const soundFontGroups = new Map<string, MidiTrack[]>();
   const sfzGroups = new Map<string, { tracks: MidiTrack[]; regions: SfzRegion[] }>();
   const plainTracks: MidiTrack[] = [];
-  for (const track of tracks) {
+  for (const track of renderTracks) {
     const instrument = track.instrument;
     if (instrument?.type === "soundfont") {
       const entry = options.resolveInstrument(instrument.libraryId);
