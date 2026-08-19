@@ -1,6 +1,6 @@
 {
   "name": "m-agent",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Game music MIDI editor with a permission-aware desktop agent.",
   "main": "dist-electron/main/index.js",
