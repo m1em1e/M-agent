@@ -26,6 +26,7 @@ import { listSkillMeta } from "./skill-loader.js";
 import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu.js";
 import { computeUiZoomFactor } from "./ui-zoom.js";
+import { installSystemProxyFetch } from "./net-fetch.js";
 import type { ProjectOpenIntent } from "../shared/bridge.js";
 
 /** 用户在本会话中经对话框/打开确认过的可写工程路径（供「保存项目」免对话框直写）。 */
@@ -38,6 +39,9 @@ const MAX_PROJECT_FILE_BYTES = 32 * 1024 * 1024;
 /** 音频导出字节上限（WAV 最大约 30 分钟 @48kHz 立体声 16bit）。 */
 const MAX_AUDIO_EXPORT_BYTES = 512 * 1024 * 1024;
 const ZOOM_APPLY_THRESHOLD = 0.01;
+
+// 让主进程的模型请求走系统代理（见 net-fetch.ts）。必须在任何请求发出前安装。
+installSystemProxyFetch();
 
 if (process.platform === "win32") {
   // Keep the Electron development host out of installed-app taskbar groups and stale pins.
