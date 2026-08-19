@@ -798,6 +798,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [themeListExpanded, setThemeListExpanded] = useState(false);
   const [workspaceLayout, setWorkspaceLayout] = useState(loadWorkspaceLayoutPreferences);
   const [workspaceWidth, setWorkspaceWidth] = useState(() => window.innerWidth);
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   const [resizingPane, setResizingPane] = useState<WorkspacePane | null>(null);
   const [instrumentLibrary, setInstrumentLibrary] = useState<InstrumentLibrarySummary[]>([]);
   const [instrumentLibraryLoaded, setInstrumentLibraryLoaded] = useState(false);
@@ -896,6 +897,12 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const observer = new ResizeObserver(updateWidth);
     observer.observe(workspace);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const updateDpr = () => setDpr(window.devicePixelRatio || 1);
+    window.addEventListener("resize", updateDpr);
+    return () => window.removeEventListener("resize", updateDpr);
   }, []);
 
   useEffect(() => {
@@ -1241,7 +1248,6 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.floor(canvasWidth * dpr);
     canvas.height = Math.floor(CANVAS_HEIGHT * dpr);
     canvas.style.width = `${canvasWidth}px`;
@@ -1347,7 +1353,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     context.lineTo(playheadX, 7);
     context.closePath();
     context.fill();
-  }, [appearance, beatWidth, canvasWidth, playhead, projectPpq, selectedNoteId, selectedTrackId, tracks]);
+  }, [appearance, beatWidth, canvasWidth, dpr, playhead, projectPpq, selectedNoteId, selectedTrackId, tracks]);
 
   useEffect(drawCanvas, [drawCanvas]);
 

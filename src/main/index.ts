@@ -25,6 +25,7 @@ import { registerInstrumentLibraryIpc } from "./audio/library-ipc.js";
 import { listSkillMeta } from "./skill-loader.js";
 import { listRecentProjects, recordRecentProject } from "./recent-projects.js";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu.js";
+import { computeUiZoomFactor } from "./ui-zoom.js";
 import type { ProjectOpenIntent } from "../shared/bridge.js";
 
 /** 用户在本会话中经对话框/打开确认过的可写工程路径（供「保存项目」免对话框直写）。 */
@@ -36,7 +37,7 @@ const MAX_MIDI_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_PROJECT_FILE_BYTES = 32 * 1024 * 1024;
 /** 音频导出字节上限（WAV 最大约 30 分钟 @48kHz 立体声 16bit）。 */
 const MAX_AUDIO_EXPORT_BYTES = 512 * 1024 * 1024;
-const UI_ZOOM_FACTOR = 1.15;
+const ZOOM_APPLY_THRESHOLD = 0.01;
 
 if (process.platform === "win32") {
   // Keep the Electron development host out of installed-app taskbar groups and stale pins.
@@ -112,8 +113,8 @@ function createWindow(openIntent?: ProjectOpenIntent): void {
   const window = new BrowserWindow({
     width: 1480,
     height: 920,
-    minWidth: 1250,
-    minHeight: 800,
+    minWidth: 1000,
+    minHeight: 640,
     backgroundColor: "#101214",
     ...(windowIcon ? { icon: windowIcon } : {}),
     titleBarStyle: "hiddenInset",
@@ -135,10 +136,15 @@ function createWindow(openIntent?: ProjectOpenIntent): void {
       : url === productionUrl;
     if (!allowed) event.preventDefault();
   });
-  window.webContents.setZoomFactor(UI_ZOOM_FACTOR);
-  window.webContents.on("did-finish-load", () => {
-    window.webContents.setZoomFactor(UI_ZOOM_FACTOR);
-  });
+  const applyUiZoom = () => {
+    const { width, height } = window.getBounds();
+    const zoom = computeUiZoomFactor(width, height);
+    if (Math.abs(zoom - window.webContents.getZoomFactor()) < ZOOM_APPLY_THRESHOLD) return;
+    window.webContents.setZoomFactor(zoom);
+  };
+  applyUiZoom();
+  window.on("resize", applyUiZoom);
+  window.webContents.on("did-finish-load", applyUiZoom);
   if (isDevelopment) void window.loadURL(process.env.VITE_DEV_SERVER_URL!);
   else void window.loadURL(productionUrl);
 }
