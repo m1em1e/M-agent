@@ -878,6 +878,27 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const liveThinkingStartedAtRef = useRef(0);
   const liveThinkingUiTimerRef = useRef<number | null>(null);
   const liveThinkingFlushTimerRef = useRef<number | null>(null);
+  /** 工程是否有未保存改动（用于新建/打开/导入/关闭前的保存提示）。 */
+  const [dirty, setDirty] = useState(false);
+  /** 未保存改动确认弹窗的待执行动作。 */
+  const [pendingUnsaved, setPendingUnsaved] = useState<"new" | "open" | "import" | "close" | null>(null);
+  const mountedRef = useRef(false);
+  const savedRef = useRef<ReturnType<typeof snapshotOf> | null>(null);
+  /** 未保存确认后正在执行打开/导入动作时，跳过 open/import 的 dirty 复查（避免二次弹窗）。 */
+  const pendingActionRunningRef = useRef(false);
+
+  function snapshotOf() {
+    return { tracks, projectTitle, tempo, timeSigNumerator, timeSigDenominator, projectPpq, metadata: projectMetadata, instruments: projectInstruments };
+  }
+  function snapshotsEqual(a: ReturnType<typeof snapshotOf>, b: ReturnType<typeof snapshotOf>): boolean {
+    return a.tracks === b.tracks && a.projectTitle === b.projectTitle && a.tempo === b.tempo
+      && a.timeSigNumerator === b.timeSigNumerator && a.timeSigDenominator === b.timeSigDenominator
+      && a.projectPpq === b.projectPpq && a.metadata === b.metadata && a.instruments === b.instruments;
+  }
+  function markSaved() {
+    savedRef.current = snapshotOf();
+    setDirty(false);
+  }
 
   const beatWidth = 54 * zoom;
   const canvasWidth = KEY_WIDTH + barCount * BEATS_PER_BAR * beatWidth;
@@ -891,10 +912,39 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     [instrumentLibrary, projectInstruments, projectMetadata, projectPpq, projectTitle, tempo, timeSigDenominator, timeSigNumerator, tracks],
   );
 
+  /** 导出/另存为的默认文件名基名：保存过则用工程文件名，否则用工程标题。 */
+  const defaultBaseName = useMemo(() => {
+    if (projectFilePath) {
+      const file = projectFilePath.split(/[\\/]/).pop() ?? "";
+      return file.replace(/\.magent$/i, "") || "Untitled";
+    }
+    return projectTitle || "Untitled";
+  }, [projectFilePath, projectTitle]);
+
   const showToast = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(null), 2400);
   }, []);
+
+  // 未保存改动追踪：首次挂载记录基线；之后偏离基线即标记 dirty。
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      savedRef.current = snapshotOf();
+      return;
+    }
+    if (savedRef.current && !snapshotsEqual(snapshotOf(), savedRef.current)) setDirty(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tracks, projectTitle, tempo, timeSigNumerator, timeSigDenominator, projectPpq, projectMetadata, projectInstruments]);
+
+  // 系统关闭入口（OS 关闭按钮/Alt+F4/Cmd+Q/应用内关闭）：未保存则弹窗，否则放行关闭。
+  useEffect(() => {
+    if (!magent?.onBeforeWindowClose) return;
+    return magent.onBeforeWindowClose(() => {
+      if (dirty) setPendingUnsaved("close");
+      else void magent.confirmWindowClose();
+    });
+  }, [magent, dirty]);
 
   const filteredSkills = agentSkills.filter((skill) => {
     const query = skillMention.query.toLowerCase();
@@ -2140,15 +2190,18 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setCandidates([]);
     setMessages((items) => [...items, { id: uid("message"), author: "agent", text: `${source}已载入：${loadedTracks.length} 条轨道。${result.warnings?.length ? `另有 ${result.warnings.length} 条导入提示。` : ""}` }]);
     showToast(`${source}已载入`);
+    markSaved();
     return true;
   };
 
   const handleOpen = async () => {
+    if (dirty && !pendingActionRunningRef.current) { setPendingUnsaved("import"); return; }
     if (!magent?.openMidi) return showToast("桌面文件桥尚未连接，当前为演示工程");
     try { loadProjectResult(await magent.openMidi(), "MIDI"); } catch (error) { showToast(errorMessage(error, "未能打开 MIDI 文件")); }
   };
 
   const handleOpenProject = async () => {
+    if (dirty && !pendingActionRunningRef.current) { setPendingUnsaved("open"); return; }
     if (!magent?.openProject) return showToast("桌面文件桥尚未连接");
     try {
       loadProjectResult(await magent.openProject(), "工程");
@@ -2157,7 +2210,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   };
 
   /** 新建项目：把编辑器重置为完全空的工程（0 轨道，在当前窗口）。 */
-  const newProject = () => {
+  const applyNewProject = () => {
     getAudioEngine()?.stopAll();
     setProjectFilePath("");
     setProjectInstruments([]);
@@ -2178,29 +2231,60 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     setGridTicks(Math.max(1, Math.round(PPQ / 4)));
     setMessages([{ id: uid("message"), author: "agent", text: WELCOME_MESSAGE }]);
     showToast("已新建空工程");
+    markSaved();
   };
 
-  const persistProject = async (path: string | null) => {
-    if (!magent?.saveProject) return showToast("桌面文件桥尚未连接");
+  /** 新建入口：有未保存改动时先弹确认，否则直接新建。 */
+  const confirmNewProject = () => {
+    if (dirty) { setPendingUnsaved("new"); return; }
+    applyNewProject();
+  };
+
+  const persistProject = async (path: string | null): Promise<boolean> => {
+    if (!magent?.saveProject) { showToast("桌面文件桥尚未连接"); return false; }
     try {
       let result: SaveResult;
       if (path && magent.saveProjectTo) {
         result = await magent.saveProjectTo(projectPayload(), path);
       } else {
-        result = await magent.saveProject(projectPayload());
+        result = await magent.saveProject(projectPayload(), defaultBaseName);
       }
-      if (!result.canceled) {
-        setProjectFilePath(result.filePath ?? "");
-        showToast("工程已保存");
-        void loadRecentProjects();
-      }
-    } catch (error) { showToast(errorMessage(error, "工程保存失败")); }
+      if (result.canceled) return false;
+      setProjectFilePath(result.filePath ?? "");
+      showToast("工程已保存");
+      markSaved();
+      void loadRecentProjects();
+      return true;
+    } catch (error) { showToast(errorMessage(error, "工程保存失败")); return false; }
   };
 
   /** 保存项目：有当前路径则免对话框直写，否则弹另存为对话框。 */
   const handleSaveProject = () => void persistProject(projectFilePath || null);
   /** 项目另存为：总是弹出对话框选择新路径。 */
   const saveProjectAs = () => void persistProject(null);
+
+  /** 未保存改动确认后执行待定动作：save=true 先保存（用户取消保存则中止）。 */
+  const performPendingAction = async (save: boolean) => {
+    const action = pendingUnsaved;
+    setPendingUnsaved(null);
+    if (!action) return;
+    if (save) {
+      const saved = await persistProject(projectFilePath || null);
+      if (!saved) return;
+    }
+    switch (action) {
+      case "new": applyNewProject(); break;
+      case "open":
+        pendingActionRunningRef.current = true;
+        try { await handleOpenProject(); } finally { pendingActionRunningRef.current = false; }
+        break;
+      case "import":
+        pendingActionRunningRef.current = true;
+        try { await handleOpen(); } finally { pendingActionRunningRef.current = false; }
+        break;
+      case "close": await magent?.confirmWindowClose(); break;
+    }
+  };
 
   const openRecentProject = async (path: string): Promise<"opened" | "missing" | "failed"> => {
     if (!magent?.openProjectAt) { showToast("桌面文件桥尚未连接"); return "failed"; }
@@ -2232,7 +2316,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       void magent?.createProjectWindow(intent);
       return;
     }
-    if (intent === "new-project") newProject();
+    if (intent === "new-project") confirmNewProject();
     else if (intent === "open-project") void handleOpenProject();
     else void handleOpen();
   };
@@ -2240,7 +2324,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const handleExport = async () => {
     if (!magent?.exportMidi) return showToast("桌面文件桥尚未连接，导出将在集成后可用");
     try {
-      const result = await magent.exportMidi(projectPayload());
+      const result = await magent.exportMidi(projectPayload(), defaultBaseName);
       if (!result.canceled) showToast("MIDI 已导出");
     } catch (error) { showToast(errorMessage(error, "导出失败")); }
   };
@@ -2272,7 +2356,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         },
       });
       const bytes = await encodeAudioBuffer(buffer, format);
-      const result = await magent.exportAudio({ format, bytes, defaultName: `${projectTitle || "audio"}` });
+      const result = await magent.exportAudio({ format, bytes, defaultName: defaultBaseName });
       if (!result.canceled) showToast(format === "ogg" ? "OGG 音频已导出" : "WAV 音频已导出");
     } catch (error) {
       showToast(errorMessage(error, "音频导出失败"));
@@ -2413,19 +2497,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   // 无显式意图时：自动打开最近一个工程；没有则新建空工程。
   useEffect(() => {
     const intent = magent?.startupIntent;
-    if (intent === "new-project") { newProject(); return; }
+    if (intent === "new-project") { confirmNewProject(); return; }
     if (intent === "open-project") { void handleOpenProject(); return; }
     if (intent === "import-midi") { void handleOpen(); return; }
-    if (!magent?.listRecentProjects) { newProject(); return; }
+    if (!magent?.listRecentProjects) { confirmNewProject(); return; }
     let cancelled = false;
     magent.listRecentProjects()
       .then(async (projects) => {
         if (cancelled) return;
-        if (projects.length === 0) { newProject(); return; }
+        if (projects.length === 0) { confirmNewProject(); return; }
         const result = await openRecentProject(projects[0].path);
-        if (result === "failed") newProject();
+        if (result === "failed") confirmNewProject();
       })
-      .catch(() => { if (!cancelled) newProject(); });
+      .catch(() => { if (!cancelled) confirmNewProject(); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [magent]);
@@ -3908,9 +3992,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <p className="settings-intro mono-path">{missingProject.path}</p>
             <div className="modal-actions">
               <button className="candidate-secondary" onClick={() => setMissingProject(null)}>取消</button>
-              <button className="candidate-secondary" onClick={() => { setMissingProject(null); newProject(); }}>新建项目</button>
+              <button className="candidate-secondary" onClick={() => { setMissingProject(null); applyNewProject(); }}>新建项目</button>
               <button className="candidate-secondary" onClick={() => { setMissingProject(null); void handleOpenProject(); }}>打开项目</button>
               <button className="primary-button" onClick={() => void magent?.closeWindow()}>关闭</button>
+            </div>
+          </section>
+        </div>
+      )}
+      {pendingUnsaved && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingUnsaved(null); }}>
+          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title">
+            <span className="modal-kicker">UNSAVED CHANGES</span>
+            <h3 id="unsaved-title">未保存的更改</h3>
+            <p className="settings-intro">当前工程有未保存的改动，是否保存后再继续？</p>
+            <div className="modal-actions">
+              <button className="candidate-secondary" onClick={() => setPendingUnsaved(null)}>取消</button>
+              <button className="candidate-secondary" onClick={() => void performPendingAction(false)}>不保存</button>
+              <button className="primary-button" onClick={() => void performPendingAction(true)}>保存并继续</button>
             </div>
           </section>
         </div>

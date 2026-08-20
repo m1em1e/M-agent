@@ -31,6 +31,8 @@ import type { ProjectOpenIntent } from "../shared/bridge.js";
 
 /** 用户在本会话中经对话框/打开确认过的可写工程路径（供「保存项目」免对话框直写）。 */
 const approvedSavePaths = new Set<string>();
+/** 各窗口「允许关闭」放行标记：确认未保存改动后置真，供 close 事件放行。 */
+const allowCloseWindows = new WeakMap<BrowserWindow, boolean>();
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -136,6 +138,13 @@ function createWindow(openIntent?: ProjectOpenIntent): void {
     },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 未保存改动确认：窗口 close（系统关闭按钮/Alt+F4/Cmd+Q 等）时先询问渲染端。
+  // 渲染端确认后经 window:confirm-close 放行；未放行则阻止关闭。
+  window.on("close", (event) => {
+    if (allowCloseWindows.get(window)) return;
+    event.preventDefault();
+    if (!window.webContents.isDestroyed()) window.webContents.send("app:before-close");
+  });
   // macOS 已有原生菜单的编辑角色处理剪贴板快捷键；其余平台补回。
   if (process.platform !== "darwin") registerClipboardShortcuts(window);
   window.webContents.on("will-navigate", (event, url) => {
@@ -166,9 +175,10 @@ ipcMain.handle("midi:open", async () => {
   return { canceled: false, filePath, project: result.project, warnings: result.warnings.map((warning) => warning.message) };
 });
 
-ipcMain.handle("midi:export", async (_event, payload: RendererProjectPayload) => {
+ipcMain.handle("midi:export", async (_event, payload: RendererProjectPayload, defaultName: unknown) => {
   const project = rendererPayloadToProject(payload);
-  const selected = await dialog.showSaveDialog({ defaultPath: `${project.title}.mid`, filters: [{ name: "MIDI", extensions: ["mid"] }] });
+  const base = typeof defaultName === "string" && defaultName.trim() ? defaultName.trim() : project.title;
+  const selected = await dialog.showSaveDialog({ defaultPath: `${sanitizeExportName(base)}.mid`, filters: [{ name: "MIDI", extensions: ["mid"] }] });
   if (selected.canceled || !selected.filePath) return { canceled: true };
   await writeFile(selected.filePath, exportMidi(project, { format: 1 }));
   return { canceled: false, filePath: selected.filePath };
@@ -196,9 +206,10 @@ ipcMain.handle("project:open-path", async (_event, path: unknown) => {
   return openProjectFile(path.trim());
 });
 
-ipcMain.handle("project:save", async (_event, payload: RendererProjectPayload) => {
+ipcMain.handle("project:save", async (_event, payload: RendererProjectPayload, defaultName: unknown) => {
   const project = rendererPayloadToProject(payload);
-  const selected = await dialog.showSaveDialog({ defaultPath: `${project.title}.magent`, filters: [{ name: "M Agent Project", extensions: ["magent"] }] });
+  const base = typeof defaultName === "string" && defaultName.trim() ? defaultName.trim() : project.title;
+  const selected = await dialog.showSaveDialog({ defaultPath: `${sanitizeExportName(base)}.magent`, filters: [{ name: "M Agent Project", extensions: ["magent"] }] });
   if (selected.canceled || !selected.filePath) return { canceled: true };
   await saveProjectToFile(project, selected.filePath);
   return { canceled: false, filePath: selected.filePath };
@@ -342,6 +353,15 @@ ipcMain.handle("window:toggle-maximize", (event) => {
 });
 ipcMain.handle("window:close", (event) => {
   BrowserWindow.fromWebContents(event.sender)?.close();
+});
+
+/** 渲染端确认未保存改动后，放行并真正关闭窗口。 */
+ipcMain.handle("window:confirm-close", (event) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  if (window) {
+    allowCloseWindows.set(window, true);
+    window.close();
+  }
 });
 
 ipcMain.handle("agent:list-skills", async () => {

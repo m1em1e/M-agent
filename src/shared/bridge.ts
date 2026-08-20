@@ -195,11 +195,11 @@ export interface MagentBridge {
   /** 订阅主进程原生菜单触发的动作；返回取消订阅函数。 */
   onMenuAction(callback: (action: string) => void): () => void;
   openMidi(): Promise<OpenMidiResult>;
-  exportMidi(payload: RendererProjectPayload): Promise<SaveResult>;
+  exportMidi(payload: RendererProjectPayload, defaultName?: string): Promise<SaveResult>;
   /** 导出离线渲染的音频字节（WAV/OGG）到用户选择的位置。 */
   exportAudio(payload: { format: "wav" | "ogg"; bytes: ArrayBuffer; defaultName: string }): Promise<SaveResult>;
   openProject(): Promise<OpenMidiResult>;
-  saveProject(payload: RendererProjectPayload): Promise<SaveResult>;
+  saveProject(payload: RendererProjectPayload, defaultName?: string): Promise<SaveResult>;
   saveApiKey(key: string): Promise<void>;
   clearApiKey(): Promise<void>;
   hasApiKey(): Promise<boolean>;
@@ -244,6 +244,10 @@ export interface MagentBridge {
   minimizeWindow(): Promise<void>;
   toggleMaximizeWindow(): Promise<void>;
   closeWindow(): Promise<void>;
+  /** 确认未保存改动后放行关闭当前窗口（配合 onBeforeWindowClose）。 */
+  confirmWindowClose(): Promise<void>;
+  /** 订阅主进程「窗口即将关闭」事件（系统关闭入口），用于未保存改动提示；返回取消订阅函数。 */
+  onBeforeWindowClose(callback: () => void): () => void;
   listInstruments(): Promise<InstrumentLibrarySummary[]>;
   /** 下载推荐音源（GeneralUser GS）到系统音源库目录；已存在则跳过下载。 */
   downloadRecommendedInstrument(): Promise<{ ok: boolean; path?: string; downloaded: boolean; error?: string }>;

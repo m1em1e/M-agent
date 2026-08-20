@@ -31,10 +31,10 @@ const bridge: MagentBridge = {
     return () => ipcRenderer.removeListener("menu:open-recent", listener);
   },
   openMidi: () => ipcRenderer.invoke("midi:open"),
-  exportMidi: (payload: RendererProjectPayload) => ipcRenderer.invoke("midi:export", payload),
+  exportMidi: (payload: RendererProjectPayload, defaultName?: string) => ipcRenderer.invoke("midi:export", payload, defaultName),
   exportAudio: (payload) => ipcRenderer.invoke("audio:export", payload),
   openProject: () => ipcRenderer.invoke("project:open"),
-  saveProject: (payload: RendererProjectPayload) => ipcRenderer.invoke("project:save", payload),
+  saveProject: (payload: RendererProjectPayload, defaultName?: string) => ipcRenderer.invoke("project:save", payload, defaultName),
   saveApiKey: (key: string) => ipcRenderer.invoke("settings:save-api-key", key),
   clearApiKey: () => ipcRenderer.invoke("settings:clear-api-key"),
   hasApiKey: () => ipcRenderer.invoke("settings:has-api-key"),
@@ -72,6 +72,12 @@ const bridge: MagentBridge = {
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  confirmWindowClose: () => ipcRenderer.invoke("window:confirm-close"),
+  onBeforeWindowClose: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("app:before-close", listener);
+    return () => ipcRenderer.removeListener("app:before-close", listener);
+  },
   listInstruments: () => ipcRenderer.invoke("instrument-library:list"),
   downloadRecommendedInstrument: () => ipcRenderer.invoke("instrument-library:download-recommended"),
   pickInstrumentFiles: () => ipcRenderer.invoke("instrument-library:pick-files"),
