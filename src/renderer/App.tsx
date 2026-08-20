@@ -2613,7 +2613,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         providerId: profile.providerId,
         apiType: profile.apiType,
         baseUrl: profile.baseUrl,
-        apiKey: "",
+        apiKey: undefined,
         models: profile.models.map((model) => ({ id: model.id, name: model.name, contextWindow: model.contextWindow })),
         notes: profile.notes ?? "",
         activeModelId: profile.activeModelId,
