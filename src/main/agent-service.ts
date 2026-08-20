@@ -17,6 +17,31 @@ import { rendererPayloadToProject } from "./project-adapter.js";
 import type { AgentAuthentication } from "./environment-service.js";
 import { recordUsage } from "./usage-store.js";
 import { isTransientAgentError, delayRetry } from "../core/agent/errors.js";
+import { detectCompatibilitySuggestion } from "./probe-compatibility.js";
+
+/** 判定错误是否为服务端 5xx（用于端点兼容性提示）。 */
+function isFiveHundredError(error: unknown): boolean {
+  return /(5\d\d|server error|internal error|500)/i.test(error instanceof Error ? error.message : String(error));
+}
+
+/**
+ * 自定义 BaseURL 订阅返回 5xx 时，探测是否由「API 类型与端点不匹配」导致；
+ * 若检测到另一 openai 端点可用，抛出带切换建议的中文错误，否则保持原错误。
+ */
+async function throwWithCompatSuggestion(error: unknown, authentication: AgentAuthentication): Promise<never> {
+  const custom = authentication?.provider === "custom" ? authentication.customProvider : undefined;
+  if (custom && isFiveHundredError(error) && custom.apiKey) {
+    const suggestion = await detectCompatibilitySuggestion({
+      baseUrl: custom.baseUrl,
+      apiKey: custom.apiKey,
+      currentApiType: custom.apiType,
+    }).catch(() => null);
+    if (suggestion) {
+      throw new Error(`请求失败：服务端返回 5xx。检测到 API 类型可能不匹配，建议切换到 ${suggestion.recommendedApiType}（可能是临时故障，若实际可用请忽略）。`);
+    }
+  }
+  throw error;
+}
 
 /**
  * Main-process orchestration boundary. Every cloud or offline request runs
@@ -102,7 +127,7 @@ export async function runAgent(
     // 瞬时流/网络错误：失败且未产出任何候选时自动重试一次（无副作用，仅重复 token 成本）。
     if (!isTransientAgentError(error)) {
       logger({ type: "agent.error", requestId, error: error instanceof Error ? error.message : String(error) });
-      throw error;
+      return await throwWithCompatSuggestion(error, authentication);
     }
     const firstMessage = error instanceof Error ? error.message : String(error);
     console.warn(`[agent] 检测到瞬时流错误，重试一次：${firstMessage}`);
@@ -114,7 +139,7 @@ export async function runAgent(
       const message = secondError instanceof Error ? secondError.message : String(secondError);
       logger({ type: "agent.retry_failed", requestId, firstError: firstMessage, error: message });
       console.warn(`[agent] 重试后仍失败：${message}`);
-      throw secondError;
+      return await throwWithCompatSuggestion(secondError, authentication);
     }
   }
   if (result.provider !== "pi-offline") {

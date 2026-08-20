@@ -17,6 +17,7 @@ import {
   toSubscriptionSummary,
   updateSubscription,
 } from "./subscription-store.js";
+import { detectCompatibilitySuggestion } from "./probe-compatibility.js";
 
 const MAX_MODEL_FETCH_BYTES = 2 * 1024 * 1024;
 
@@ -115,7 +116,9 @@ async function fetchModelsFromProvider(request: FetchModelsRequest): Promise<Fet
     const body: unknown = JSON.parse(text);
     const models = extractModelList(body, apiType);
     if (models.length === 0) throw new Error("接口返回中未识别到可用模型。");
-    return { models, message: `拉取到 ${models.length} 个模型。` };
+    // 端点兼容性探测：当前 apiType 端点不可用而另一 openai 端点可用时给出建议。
+    const suggestion = await detectCompatibilitySuggestion({ baseUrl, apiKey, currentApiType: apiType }).catch(() => null);
+    return { models, message: `拉取到 ${models.length} 个模型。`, compatibilitySuggestion: suggestion ?? undefined };
   } catch (error) {
     if (controller.signal.aborted) throw new Error("拉取模型超时，请检查 BaseURL 或网络。");
     throw error;

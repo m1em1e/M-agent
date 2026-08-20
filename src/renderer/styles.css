@@ -1259,6 +1259,9 @@ html, body, #root { color: var(--text); background: var(--bg); }
 .subscription-field textarea { resize: vertical; }
 .subscription-field input:focus, .subscription-field select:focus, .subscription-field textarea:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
 
+.compat-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 11px; border: 1px solid #7a5c3a; border-radius: 5px; background: #2a2419; color: #d8b27a; font-size: 9px; line-height: 1.5; }
+.compat-banner .candidate-secondary { flex: 0 0 auto; }
+
 .subscription-models { display: grid; gap: 7px; padding: 12px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface-editor); }
 .subscription-models-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .subscription-models-head strong { color: var(--text); font-size: 10px; }

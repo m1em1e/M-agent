@@ -77,9 +77,16 @@ export interface FetchModelsRequest {
   apiKey: string;
 }
 
+/** 端点兼容性建议：建议把订阅的 API 类型切换为 recommendedApiType。 */
+export interface CompatibilitySuggestion {
+  recommendedApiType: "openai-completions" | "openai-responses";
+  reason: string;
+}
+
 export interface FetchModelsResult {
   models: Array<{ id: string; name: string }>;
   message?: string;
+  compatibilitySuggestion?: CompatibilitySuggestion;
 }
 
 export interface ImportResult {

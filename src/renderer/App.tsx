@@ -851,6 +851,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [providersView, setProvidersView] = useState<"list" | "edit">("list");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
   const [subscriptionDraft, setSubscriptionDraft] = useState<SubscriptionInput | null>(null);
+  const [compatSuggestion, setCompatSuggestion] = useState<{ recommendedApiType: SubscriptionInput["apiType"]; reason: string } | null>(null);
   const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [presetSearch, setPresetSearch] = useState("");
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
@@ -2602,7 +2603,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     if (!profile) {
       setProvidersView("list");
       setEditingSubscriptionId(null);
-      setSubscriptionDraft(null);
+      setSubscriptionDraft(null); setCompatSuggestion(null);
       return;
     }
     if ("models" in profile && "hasApiKey" in profile) {
@@ -2648,7 +2649,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
       setProvidersView("list");
       setEditingSubscriptionId(null);
-      setSubscriptionDraft(null);
+      setSubscriptionDraft(null); setCompatSuggestion(null);
       await loadSubscriptions();
       await refreshEnvironment();
     } catch (error) {
@@ -2667,7 +2668,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       await magent.deleteSubscription(profile.id);
       setProvidersView("list");
       setEditingSubscriptionId(null);
-      setSubscriptionDraft(null);
+      setSubscriptionDraft(null); setCompatSuggestion(null);
       await loadSubscriptions();
       await refreshEnvironment();
       showToast(`已删除订阅「${profile.name}」`);
@@ -2749,6 +2750,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         ...current,
         models: result.models.map((model) => ({ id: model.id, name: model.name })),
       } : current);
+      setCompatSuggestion(result.compatibilitySuggestion ?? null);
       showToast(result.message ?? `拉取到 ${result.models.length} 个模型`);
     } catch (error) {
       showToast(errorMessage(error, "拉取模型失败"));
@@ -3658,11 +3660,17 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                       <label className="subscription-field"><span>显示名称</span><input value={subscriptionDraft.name} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, name: event.target.value } : current)} placeholder="例如：DeepSeek 主力" /></label>
                       <label className="subscription-field"><span>Provider ID</span><input value={subscriptionDraft.providerId} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, providerId: event.target.value } : current)} placeholder="例如：deepseek" /></label>
                       <label className="subscription-field"><span>API 类型</span>
-                        <select value={subscriptionDraft.apiType} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, apiType: event.target.value as SubscriptionInput["apiType"] } : current)}>
+                        <select value={subscriptionDraft.apiType} onChange={(event) => { setCompatSuggestion(null); setSubscriptionDraft((current) => current ? { ...current, apiType: event.target.value as SubscriptionInput["apiType"] } : current); }}>
                           {SUBSCRIPTION_API_TYPES.map((apiType) => <option key={apiType.id} value={apiType.id}>{apiType.label}</option>)}
                         </select>
                       </label>
-                      <label className="subscription-field"><span>BaseURL</span><input value={subscriptionDraft.baseUrl} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, baseUrl: event.target.value } : current)} placeholder="https://api.example.com/v1" /></label>
+                      {compatSuggestion && (
+                        <div className="compat-banner">
+                          <span>{compatSuggestion.reason}（可能是临时服务端故障，若实际可用请忽略）</span>
+                          <button className="candidate-secondary" onClick={() => { setSubscriptionDraft((current) => current ? { ...current, apiType: compatSuggestion.recommendedApiType } : current); setCompatSuggestion(null); }}>切换</button>
+                        </div>
+                      )}
+                      <label className="subscription-field"><span>BaseURL</span><input value={subscriptionDraft.baseUrl} onChange={(event) => { setCompatSuggestion(null); setSubscriptionDraft((current) => current ? { ...current, baseUrl: event.target.value } : current); }} placeholder="https://api.example.com/v1" /></label>
                       <label className="subscription-field"><span>API key</span><input type="password" value={subscriptionDraft.apiKey ?? ""} onChange={(event) => setSubscriptionDraft((current) => current ? { ...current, apiKey: event.target.value } : current)} placeholder={editingSubscriptionId ? "留空表示保持不变" : "sk-••••••••••••••••"} autoComplete="off" /></label>
                       <div className="subscription-models">
                         <div className="subscription-models-head">
