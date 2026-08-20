@@ -1,13 +1,19 @@
+<div align="center">
+
 # 🎹 M Agent
 
 ![Version](https://img.shields.io/badge/version-0.4.0-2b8a3e)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4a9eda)
+
 ![Electron](https://img.shields.io/badge/Electron-43-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6)
+
 ![License](https://img.shields.io/badge/License-MIT-blue)
 
 **[中文](README.md) · [English](README.en.md)**
+
+</div>
 
 > 面向独立游戏开发者的桌面 MIDI 创作 Agent。把多轨钢琴卷帘、非破坏式 MIDI 编辑和三种受权限约束的 Agent 工作模式放进同一个工程。
 
