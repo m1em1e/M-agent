@@ -5,7 +5,7 @@
 ![Electron](https://img.shields.io/badge/Electron-43-47848f)
 ![React](https://img.shields.io/badge/React-19-61dafb)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6)
-![Status](https://img.shields.io/badge/Status-Private-8a6d3b)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 **[中文](README.md) · [English](README.en.md)**
 
@@ -13,10 +13,8 @@
 
 ## 📸 界面预览
 
-<!-- 待补充：在此处插入应用界面截图（如 docs/screenshots/main.png） -->
-
-<div align="center" style="border:1px dashed #3a4040;border-radius:8px;padding:48px;color:#6a706d;background:#16191a;">
-  界面截图待补充
+<div align="center">
+  <img src="doc/screenshots/main.png" alt="M Agent 界面预览" width="820" />
 </div>
 
 ## ✨ 特性亮点
