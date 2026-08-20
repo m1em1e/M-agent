@@ -887,6 +887,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const savedRef = useRef<ReturnType<typeof snapshotOf> | null>(null);
   /** 未保存确认后正在执行打开/导入动作时，跳过 open/import 的 dirty 复查（避免二次弹窗）。 */
   const pendingActionRunningRef = useRef(false);
+  /** markSaved 后置真：dirty effect 在 setState 生效后把当前最新状态作为新基线（而非旧闭包值）。 */
+  const refreshBaselineRef = useRef(false);
 
   function snapshotOf() {
     return { tracks, projectTitle, tempo, timeSigNumerator, timeSigDenominator, projectPpq, metadata: projectMetadata, instruments: projectInstruments };
@@ -896,7 +898,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       && a.timeSigNumerator === b.timeSigNumerator && a.timeSigDenominator === b.timeSigDenominator
       && a.projectPpq === b.projectPpq && a.metadata === b.metadata && a.instruments === b.instruments;
   }
+  /** 供加载/新建使用：状态即将（异步）变化，标记让 effect 用最新 state 重设基线。 */
   function markSaved() {
+    refreshBaselineRef.current = true;
+    setDirty(false);
+  }
+  /** 供保存使用：保存不改变状态，立即用当前快照更新基线。 */
+  function markSavedNow() {
     savedRef.current = snapshotOf();
     setDirty(false);
   }
@@ -932,6 +940,12 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     if (!mountedRef.current) {
       mountedRef.current = true;
       savedRef.current = snapshotOf();
+      return;
+    }
+    if (refreshBaselineRef.current) {
+      refreshBaselineRef.current = false;
+      savedRef.current = snapshotOf();
+      setDirty(false);
       return;
     }
     if (savedRef.current && !snapshotsEqual(snapshotOf(), savedRef.current)) setDirty(true);
@@ -2253,7 +2267,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       if (result.canceled) return false;
       setProjectFilePath(result.filePath ?? "");
       showToast("工程已保存");
-      markSaved();
+      markSavedNow();
       void loadRecentProjects();
       return true;
     } catch (error) { showToast(errorMessage(error, "工程保存失败")); return false; }
