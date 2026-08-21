@@ -1642,6 +1642,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   /** 音色搜索框任意改动（增/删/改）→ 更新关键词 + 过滤结果 state。 */
   const handleInstrumentQueryChange = (value: string) => {
+    // eslint-disable-next-line no-console
+    console.log("[instrument-search]", JSON.stringify(value));
     setInstrumentSelectQuery(value);
     setInstrumentFiltered(filterInstruments(value));
     setInstrumentChoiceIndex(0);
@@ -3277,6 +3279,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         autoComplete="off"
                         placeholder="搜索音色…"
                         defaultValue={instrumentSelectQuery}
+                        onKeyUp={(event) => handleInstrumentQueryChange(event.currentTarget.value)}
                         onKeyDown={(event) => {
                           if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, instrumentDisplayOptions.length - 1)); }
                           else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
@@ -3285,7 +3288,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         }}
                       />
                     </div>
-                    <div className="instrument-select-options">
+                    <div className="instrument-select-options" key={instrumentSelectQuery}>
                       {instrumentDisplayOptions.length === 1 && instrumentSelectQuery.trim() ? (
                         <div className="instrument-select-empty">无匹配音色</div>
                       ) : (
