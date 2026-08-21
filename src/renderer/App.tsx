@@ -1632,6 +1632,12 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     return out;
   }, [instrumentGroups, instrumentSelectQuery]);
 
+  /** 统一渲染与键盘导航的展示列表：默认项 + 过滤后的音色项。 */
+  const instrumentDisplayOptions = useMemo(() => [
+    { key: "none", label: "默认（振荡器）", value: "none", group: "" },
+    ...filteredInstrumentOptions,
+  ], [filteredInstrumentOptions]);
+
   const instrumentCurrentLabel = useMemo(() => {
     const instrument = selectedTrack?.instrument;
     if (!instrument) return "默认（振荡器）";
@@ -3249,29 +3255,29 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         value={instrumentSelectQuery}
                         onChange={(event) => { setInstrumentSelectQuery(event.target.value); setInstrumentChoiceIndex(0); }}
                         onKeyDown={(event) => {
-                          if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, filteredInstrumentOptions.length)); }
+                          if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, instrumentDisplayOptions.length - 1)); }
                           else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
-                          else if (event.key === "Enter") { event.preventDefault(); const target = filteredInstrumentOptions[instrumentChoiceIndex]; if (target) applyInstrumentValue(target.value); }
+                          else if (event.key === "Enter") { event.preventDefault(); const target = instrumentDisplayOptions[instrumentChoiceIndex]; if (target) applyInstrumentValue(target.value); }
                           else if (event.key === "Escape") { setInstrumentMenuOpen(false); }
                         }}
                       />
                     </div>
                     <div className="instrument-select-options">
-                      <button type="button" role="option" aria-selected={!selectedTrack?.instrument} className={!selectedTrack?.instrument ? "active" : ""} onClick={() => applyInstrumentValue("none")}>默认（振荡器）</button>
-                      {filteredInstrumentOptions.map((option, index) => (
-                        <button
-                          key={option.key}
-                          type="button"
-                          role="option"
-                          aria-selected={index === instrumentChoiceIndex}
-                          className={index === instrumentChoiceIndex ? "active" : ""}
-                          onClick={() => applyInstrumentValue(option.value)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                      {filteredInstrumentOptions.length === 0 && (
+                      {instrumentDisplayOptions.length === 1 && instrumentSelectQuery.trim() ? (
                         <div className="instrument-select-empty">无匹配音色</div>
+                      ) : (
+                        instrumentDisplayOptions.map((option, index) => (
+                          <button
+                            key={option.key}
+                            type="button"
+                            role="option"
+                            aria-selected={index === instrumentChoiceIndex}
+                            className={index === instrumentChoiceIndex ? "active" : ""}
+                            onClick={() => applyInstrumentValue(option.value)}
+                          >
+                            {option.label}
+                          </button>
+                        ))
                       )}
                     </div>
                   </div>
