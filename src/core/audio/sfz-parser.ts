@@ -86,6 +86,55 @@ export function selectSfzRegions(regions: SfzRegion[], note: number, velocity: n
     && velocity >= region.lovel && velocity <= region.hivel);
 }
 
+/** 分组行为（seq 轮换 / random / trigger）所需的状态。 */
+export interface SfzPickState {
+  /** note → 该键的轮换触发计数（从 0 起，每次触发 +1）。 */
+  seqCounts?: Map<number, number>;
+}
+
+/**
+ * 带分组行为的区域选择：
+ * - trigger：attack（默认）只选非 release 区域；release 只选 release 区域。
+ * - seq_length/seq_position：按 note 触发计数顺序轮换。
+ * - random：按权重（0–100）随机保留，避免全滤时回退到全部命中。
+ * 保留 selectSfzRegions 的基础键区/力度过滤。
+ */
+export function pickSfzRegions(
+  regions: SfzRegion[],
+  note: number,
+  velocity: number,
+  trigger: "attack" | "release",
+  state?: SfzPickState,
+  random: () => number = Math.random,
+): SfzRegion[] {
+  const base = selectSfzRegions(regions, note, velocity);
+  if (base.length === 0) return base;
+  const matched = base.filter((region) =>
+    trigger === "release" ? region.trigger === "release" : region.trigger !== "release");
+  if (matched.length === 0) return trigger === "release" ? matched : base;
+
+  // seq 轮换：有 seq_length/seq_position 的区域按触发计数选当前位。
+  const seqRegions = matched.filter((region) => region.seqLength !== undefined && region.seqPosition !== undefined);
+  if (seqRegions.length > 0) {
+    const length = seqRegions[0].seqLength ?? 1;
+    const count = state?.seqCounts?.get(note) ?? 0;
+    state?.seqCounts?.set(note, count + 1);
+    const expected = (count % length) + 1;
+    return matched.filter((region) =>
+      region.seqPosition === undefined || region.seqPosition === expected);
+  }
+
+  // random：按权重独立保留，全部滤掉时回退全部。
+  const withRandom = matched.filter((region) => region.randomChance !== undefined);
+  if (withRandom.length > 0) {
+    const kept = matched.filter((region) =>
+      region.randomChance === undefined || random() * 100 < region.randomChance);
+    return kept.length > 0 ? kept : matched;
+  }
+
+  return matched;
+}
+
 function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   const sample = opcodes.get("sample");
   if (!sample) return null;
@@ -145,7 +194,64 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   const velTrack = parsePercent(pickOpcode(opcodes, "amp_veltrack", "ampeg_veltrack"));
   if (velTrack !== undefined) region.ampVelTrack = velTrack;
 
+  // A：别名与补全 —— tune/pitch 为 tuning 的别名；delay、pitch_keytrack、pitch_offset。
+  const tuningRaw = pickOpcode(opcodes, "tuning", "tune", "pitch");
+  if (tuningRaw !== undefined) {
+    const parsedTuning = Number(tuningRaw);
+    if (Number.isFinite(parsedTuning)) region.tuning = parsedTuning;
+  }
+  const delay = parseSeconds(pickOpcode(opcodes, "delay", "amp_env_delay", "ampeg_delay"));
+  if (delay !== undefined) region.delay = delay;
+  const keytrack = parsePercent(pickOpcode(opcodes, "pitch_keytrack"));
+  if (keytrack !== undefined) region.keytrack = keytrack;
+  const pitchOffset = pickInt(opcodes, "pitch_offset", 0);
+  if (opcodes.has("pitch_offset")) region.pitchOffset = pitchOffset;
+
+  // B：滤波器 —— fil_type / cutoff / resonance。
+  const filterType = pickOpcode(opcodes, "fil_type");
+  if (filterType !== undefined) {
+    const mapped = mapFilterType(filterType);
+    if (mapped) region.filterType = mapped;
+  }
+  if (opcodes.has("cutoff")) {
+    const cutoff = positiveInt(opcodes.get("cutoff") ?? "0");
+    if (cutoff > 0) region.cutoffHz = cutoff;
+  }
+  if (opcodes.has("resonance")) {
+    const resonance = positiveInt(opcodes.get("resonance") ?? "0");
+    // SFZ resonance 0–40（dB 风格）；映射到 BiquadFilter Q（约 0.5–20）。
+    if (resonance > 0) region.resonanceQ = 0.5 + (resonance / 40) * 19.5;
+  }
+
+  // C：分组行为 —— seq_length / seq_position / random / trigger。
+  if (opcodes.has("seq_length")) {
+    const seqLength = positiveInt(opcodes.get("seq_length") ?? "0");
+    if (seqLength > 0) region.seqLength = seqLength;
+  }
+  if (opcodes.has("seq_position")) {
+    const seqPosition = positiveInt(opcodes.get("seq_position") ?? "0");
+    if (seqPosition > 0) region.seqPosition = seqPosition;
+  }
+  const randomChance = parsePercent(pickOpcode(opcodes, "random"));
+  if (randomChance !== undefined) region.randomChance = randomChance;
+  const trigger = pickOpcode(opcodes, "trigger");
+  if (trigger === "release" || trigger === "first" || trigger === "legato") {
+    region.trigger = trigger;
+  } else if (trigger !== undefined) {
+    region.trigger = "attack";
+  }
+
   return region;
+}
+
+/** 映射 SFZ fil_type 到 Web Audio 滤波器类型；无法识别返回 undefined。 */
+function mapFilterType(value: string): SfzRegion["filterType"] | undefined {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("lpf") || normalized.includes("lowpass")) return "lowpass";
+  if (normalized.includes("hpf") || normalized.includes("highpass")) return "highpass";
+  if (normalized.includes("bpf") || normalized.includes("bandpass")) return "bandpass";
+  if (normalized.includes("brf") || normalized.includes("bandreject") || normalized.includes("notch")) return "bandreject";
+  return undefined;
 }
 
 /** 依次从多个候选 key 中取第一个存在的值。 */

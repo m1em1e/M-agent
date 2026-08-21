@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSfzText, selectSfzRegions } from "../../src/core/audio/sfz-parser";
+import { parseSfzText, pickSfzRegions, selectSfzRegions } from "../../src/core/audio/sfz-parser";
 
 describe("parseSfzText", () => {
   it("解析基础 region 并给出默认值", () => {
@@ -143,6 +143,83 @@ describe("parseSfzText", () => {
   it("支持带引号的 sample 路径", () => {
     const { regions } = parseSfzText(`<region> sample="my samples/piano A.wav"`);
     expect(regions[0].samplePath).toBe("my samples/piano A.wav");
+  });
+
+  it("tune/pitch 作为 tuning 的别名（Salamander Retuned 风格）", () => {
+    expect(parseSfzText(`<region> sample=a.wav tune=10`).regions[0].tuning).toBe(10);
+    expect(parseSfzText(`<region> sample=a.wav pitch=-5`).regions[0].tuning).toBe(-5);
+    expect(parseSfzText(`<region> sample=a.wav tuning=3`).regions[0].tuning).toBe(3);
+  });
+
+  it("解析 delay / pitch_keytrack / pitch_offset", () => {
+    const { regions } = parseSfzText(`<region> sample=a.wav delay=0.02 pitch_keytrack=50 pitch_offset=12`);
+    expect(regions[0].delay).toBe(0.02);
+    expect(regions[0].keytrack).toBe(50);
+    expect(regions[0].pitchOffset).toBe(12);
+    const ariaDelay = parseSfzText(`<region> sample=a.wav ampeg_delay=0.05`).regions[0];
+    expect(ariaDelay.delay).toBe(0.05);
+  });
+
+  it("解析滤波器 opcode（fil_type/cutoff/resonance → Q）", () => {
+    const lp = parseSfzText(`<region> sample=a.wav fil_type=lpf_hp cutoff=2000 resonance=10`).regions[0];
+    expect(lp.filterType).toBe("lowpass");
+    expect(lp.cutoffHz).toBe(2000);
+    expect(lp.resonanceQ).toBeCloseTo(0.5 + (10 / 40) * 19.5, 5);
+    const bp = parseSfzText(`<region> sample=a.wav fil_type=bandpass cutoff=800`).regions[0];
+    expect(bp.filterType).toBe("bandpass");
+    const unknown = parseSfzText(`<region> sample=a.wav fil_type=foobar`).regions[0];
+    expect(unknown.filterType).toBeUndefined();
+  });
+
+  it("解析分组行为 opcode（seq/random/trigger）", () => {
+    const { regions } = parseSfzText(`
+      <group> seq_length=2
+      <region> sample=a.wav seq_position=1
+      <region> sample=b.wav seq_position=2 random=40 trigger=release
+    `);
+    expect(regions[0]).toMatchObject({ seqLength: 2, seqPosition: 1 });
+    expect(regions[1]).toMatchObject({ seqLength: 2, seqPosition: 2, randomChance: 40, trigger: "release" });
+  });
+});
+
+describe("pickSfzRegions", () => {
+  const regions = parseSfzText(`
+    <group> seq_length=2
+    <region> sample=a.wav key=60 seq_position=1
+    <region> sample=b.wav key=60 seq_position=2
+    <region> sample=r.wav key=60 trigger=release
+  `).regions;
+
+  it("attack 触发时排除 release 区域", () => {
+    const matched = pickSfzRegions(regions, 60, 90, "attack");
+    expect(matched.some((region) => region.samplePath === "r.wav")).toBe(false);
+    expect(matched.length).toBeGreaterThan(0);
+  });
+
+  it("release 触发时只选 release 区域", () => {
+    const matched = pickSfzRegions(regions, 60, 90, "release");
+    expect(matched.map((region) => region.samplePath)).toEqual(["r.wav"]);
+  });
+
+  it("seq 轮换按触发计数选择对应位置", () => {
+    const state = { seqCounts: new Map<number, number>() };
+    const first = pickSfzRegions(regions, 60, 90, "attack", state);
+    expect(first.map((region) => region.samplePath)).toEqual(["a.wav"]);
+    const second = pickSfzRegions(regions, 60, 90, "attack", state);
+    expect(second.map((region) => region.samplePath)).toEqual(["b.wav"]);
+    const third = pickSfzRegions(regions, 60, 90, "attack", state);
+    expect(third.map((region) => region.samplePath)).toEqual(["a.wav"]);
+  });
+
+  it("random 按权重保留；全部滤掉时回退全部", () => {
+    const withRandom = parseSfzText(`
+      <region> sample=x.wav key=60 random=0
+      <region> sample=y.wav key=60 random=0
+    `).regions;
+    // random() 恒返回 0.5 → 0.5*100=50，random=0 不保留 → 全部滤掉回退。
+    expect(pickSfzRegions(withRandom, 60, 90, "attack", undefined, () => 0.5).length).toBe(2);
+    // random() 恒返回 0.9 → 保留 random>90 的（无）→ 回退。
+    expect(pickSfzRegions(withRandom, 60, 90, "attack", undefined, () => 0.95).length).toBe(2);
   });
 });
 

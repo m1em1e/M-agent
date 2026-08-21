@@ -87,6 +87,26 @@ export interface SfzRegion {
   end?: number;
   /** 力度对音量的调制深度（0–100%，默认 100=力度完全决定）。 */
   ampVelTrack?: number;
+  /** 触发延迟（秒）。 */
+  delay?: number;
+  /** 音高键跟随比例（0–100%，100=随键完全移调，0=固定键高）。 */
+  keytrack?: number;
+  /** 音高偏移（半音）。 */
+  pitchOffset?: number;
+  /** 滤波器类型。 */
+  filterType?: "lowpass" | "highpass" | "bandpass" | "bandreject";
+  /** 滤波器截止频率（Hz）。 */
+  cutoffHz?: number;
+  /** 滤波器 Q 值（resonance）。 */
+  resonanceQ?: number;
+  /** 分组轮换变体总数（seq_length）。 */
+  seqLength?: number;
+  /** 分组轮换变体序号（seq_position，从 1 起）。 */
+  seqPosition?: number;
+  /** 随机选中权重（0–100，越高越常被选中）。 */
+  randomChance?: number;
+  /** 触发条件（默认 attack）。 */
+  trigger?: "attack" | "release" | "first" | "legato";
 }
 
 /** Renderer 可见的库条目摘要。 */
