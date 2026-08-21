@@ -74,7 +74,10 @@ export interface SubscriptionInput {
 export interface FetchModelsRequest {
   apiType: SubscriptionApiType;
   baseUrl: string;
-  apiKey: string;
+  /** 拉取模型用的 API Key；为空时若提供 subscriptionId 则回退用该订阅已保存的 Key。 */
+  apiKey?: string;
+  /** 订阅 id（编辑已有订阅且 AK 留空时，回退读取其已保存的 Key）。 */
+  subscriptionId?: string;
 }
 
 /** 端点兼容性建议：建议把订阅的 API 类型切换为 recommendedApiType。 */

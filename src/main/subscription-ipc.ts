@@ -14,6 +14,7 @@ import {
   deleteSubscription,
   importSubscriptionProfiles,
   listSubscriptionSummaries,
+  readSubscriptionApiKey,
   toSubscriptionSummary,
   updateSubscription,
 } from "./subscription-store.js";
@@ -89,9 +90,13 @@ export function registerSubscriptionIpc(): void {
 }
 
 async function fetchModelsFromProvider(request: FetchModelsRequest): Promise<FetchModelsResult> {
-  const { apiType, baseUrl, apiKey } = request;
+  const { apiType, baseUrl, apiKey: explicitKey, subscriptionId } = request;
   if (!baseUrl.trim()) throw new Error("请先填写 BaseURL。");
-  if (!apiKey.trim()) throw new Error("请先填写 API Key 后才能拉取模型列表。");
+  // AK 为空时回退用该订阅已保存的 Key（编辑已有订阅、AK 留空表示保持不变）。
+  const apiKey = explicitKey?.trim()
+    || (subscriptionId ? readSubscriptionApiKey(subscriptionId)?.trim() : "")
+    || "";
+  if (!apiKey) throw new Error("请先填写 API Key 后才能拉取模型列表。");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
@@ -172,8 +177,9 @@ function assertFetchModelsRequest(value: unknown): FetchModelsRequest {
     throw new Error("API 类型无效。");
   }
   if (typeof request.baseUrl !== "string") throw new Error("BaseURL 无效。");
-  if (typeof request.apiKey !== "string") throw new Error("API Key 无效。");
-  return { apiType: request.apiType, baseUrl: request.baseUrl, apiKey: request.apiKey };
+  if (request.apiKey !== undefined && typeof request.apiKey !== "string") throw new Error("API Key 无效。");
+  if (request.subscriptionId !== undefined && typeof request.subscriptionId !== "string") throw new Error("订阅 ID 无效。");
+  return { apiType: request.apiType, baseUrl: request.baseUrl, apiKey: request.apiKey, subscriptionId: request.subscriptionId };
 }
 
 function assertSubscriptionInput(value: unknown): SubscriptionInput {

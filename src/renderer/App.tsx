@@ -2891,13 +2891,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     if (!magent?.fetchSubscriptionModels) return showToast("桌面拉取桥尚未连接");
     if (!subscriptionDraft) return;
     if (!subscriptionDraft.baseUrl.trim()) return showToast("请先填写 BaseURL");
-    if (!subscriptionDraft.apiKey?.trim()) return showToast("请先填写 API Key");
+    if (!subscriptionDraft.apiKey?.trim() && !editingSubscriptionId) return showToast("请先填写 API Key");
     setFetchingModels(true);
     try {
       const request: FetchModelsRequest = {
         apiType: subscriptionDraft.apiType,
         baseUrl: subscriptionDraft.baseUrl,
-        apiKey: subscriptionDraft.apiKey.trim(),
+        apiKey: subscriptionDraft.apiKey?.trim() || undefined,
+        subscriptionId: editingSubscriptionId ?? undefined,
       };
       const result = await magent.fetchSubscriptionModels(request);
       setSubscriptionDraft((current) => current ? {
