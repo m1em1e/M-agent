@@ -126,12 +126,41 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
     region.loopEnd = positiveInt(opcodes.get("loop_end") ?? "0");
   }
 
-  const attack = parseSeconds(opcodes.get("amp_env_attack"));
-  const release = parseSeconds(opcodes.get("amp_env_release"));
+  const attack = parseSeconds(pickOpcode(opcodes, "amp_env_attack", "ampeg_attack"));
+  const decay = parseSeconds(pickOpcode(opcodes, "amp_env_decay", "ampeg_decay"));
+  const sustain = parsePercent(pickOpcode(opcodes, "amp_env_sustain", "ampeg_sustain"));
+  const release = parseSeconds(pickOpcode(opcodes, "amp_env_release", "ampeg_release"));
+  const hold = parseSeconds(pickOpcode(opcodes, "amp_env_hold", "ampeg_hold"));
   if (attack !== undefined) region.attack = attack;
+  if (decay !== undefined) region.decay = decay;
+  if (sustain !== undefined) region.sustain = sustain;
   if (release !== undefined) region.release = release;
+  if (hold !== undefined) region.hold = hold;
+
+  const offset = positiveInt(pickOpcode(opcodes, "offset") ?? "0");
+  const end = positiveInt(pickOpcode(opcodes, "end") ?? "0");
+  if (opcodes.has("offset")) region.offset = offset;
+  if (opcodes.has("end")) region.end = end;
+
+  const velTrack = parsePercent(pickOpcode(opcodes, "amp_veltrack", "ampeg_veltrack"));
+  if (velTrack !== undefined) region.ampVelTrack = velTrack;
 
   return region;
+}
+
+/** 依次从多个候选 key 中取第一个存在的值。 */
+function pickOpcode(opcodes: Map<string, string>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    if (opcodes.has(key)) return opcodes.get(key);
+  }
+  return undefined;
+}
+
+/** 解析 0–100 百分比；非法或缺失返回 undefined。 */
+function parsePercent(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? clamp(parsed, 0, 100) : undefined;
 }
 
 /** 解析一行 `key=value key="value with space"` 形式的 opcode。 */

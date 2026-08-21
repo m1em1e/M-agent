@@ -327,18 +327,33 @@ function scheduleSfzSource(
     source.loopEnd = region.loopEnd / buffer.sampleRate;
   }
   const gainNode = context.createGain();
-  const level = Math.pow(10, region.volume / 20)
-    * Math.max(0, Math.min(1, note.velocity / 127))
-    * Math.max(0, Math.min(1, volume));
+  // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
+  const vel = Math.max(0, Math.min(1, note.velocity / 127));
+  let velocityFactor = vel;
+  const veltrack = region.ampVelTrack;
+  if (veltrack !== undefined && veltrack !== 100) {
+    const t = Math.max(0, Math.min(100, veltrack)) / 100;
+    velocityFactor = t * vel + (1 - t);
+  }
+  const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, volume));
+  // 完整 ADSR 包络。
   const attack = region.attack ?? 0.005;
+  const decay = region.decay ?? 0;
+  const sustainLevel = region.sustain !== undefined ? Math.max(0, region.sustain) / 100 : 1;
   const release = region.release ?? 0.1;
+  const tAttack = startSec + attack;
+  const tDecayEnd = tAttack + decay;
+  const sustainGain = Math.max(0.0005, peak * sustainLevel);
+  const releaseStart = Math.max(tDecayEnd + 0.001, stopSec - release);
   gainNode.gain.setValueAtTime(0.0001, startSec);
-  gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, level), startSec + attack);
-  const releaseStart = Math.max(startSec + attack + 0.005, stopSec - release);
+  gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), tAttack);
+  if (decay > 0) {
+    gainNode.gain.exponentialRampToValueAtTime(sustainGain, tDecayEnd);
+  }
   if (releaseStart >= stopSec) {
-    gainNode.gain.setValueAtTime(Math.max(0.001, level), stopSec);
+    gainNode.gain.setValueAtTime(sustainGain, stopSec);
   } else {
-    gainNode.gain.setValueAtTime(Math.max(0.001, level), releaseStart);
+    gainNode.gain.setValueAtTime(sustainGain, releaseStart);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, stopSec);
   }
   let output: AudioNode = gainNode;
@@ -350,8 +365,12 @@ function scheduleSfzSource(
   }
   source.connect(gainNode);
   output.connect(context.destination);
-  source.start(startSec);
-  source.stop(stopSec + 0.05);
+  // 采样 offset/end 截取。
+  const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
+  const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
+  const playDuration = Math.max(0.001, endSec - offsetSec);
+  source.start(startSec, offsetSec, playDuration);
+  source.stop(Math.min(stopSec + 0.05, startSec + playDuration + 0.05));
 }
 
 function scheduleOscillator(

@@ -73,8 +73,20 @@ export interface SfzRegion {
   loopEnd?: number;
   /** 攻击时间（秒）。 */
   attack?: number;
+  /** 衰减时间（秒）。 */
+  decay?: number;
+  /** 延音电平（0–100 百分比，相对峰值）。 */
+  sustain?: number;
   /** 释放时间（秒）。 */
   release?: number;
+  /** 保持时间（秒）。 */
+  hold?: number;
+  /** 采样起始截取（sample 帧）。 */
+  offset?: number;
+  /** 采样结束截取（sample 帧）。 */
+  end?: number;
+  /** 力度对音量的调制深度（0–100%，默认 100=力度完全决定）。 */
+  ampVelTrack?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

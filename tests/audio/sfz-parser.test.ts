@@ -94,6 +94,52 @@ describe("parseSfzText", () => {
     expect(defaultPath).toBe("samples/");
   });
 
+  it("解析 ampeg_* 别名包络与 amp_veltrack（ARIA 风格，Salamander 钢琴）", () => {
+    const { regions } = parseSfzText(`<group> amp_veltrack=73 ampeg_release=1
+      <region> sample=a.wav pitch_keycenter=60`);
+    expect(regions[0]).toMatchObject({ ampVelTrack: 73, release: 1 });
+  });
+
+  it("解析完整 ADSR 与 hold（amp_env_* 与 ampeg_* 两前缀）", () => {
+    const env = parseSfzText(`<region> sample=a.wav amp_env_attack=0.01 amp_env_decay=0.2 amp_env_sustain=70 amp_env_release=0.5 amp_env_hold=0.1`).regions[0];
+    expect(env).toMatchObject({ attack: 0.01, decay: 0.2, sustain: 70, release: 0.5, hold: 0.1 });
+    const aria = parseSfzText(`<region> sample=a.wav ampeg_attack=0.02 ampeg_decay=0.3 ampeg_sustain=60 ampeg_release=0.8`).regions[0];
+    expect(aria).toMatchObject({ attack: 0.02, decay: 0.3, sustain: 60, release: 0.8 });
+  });
+
+  it("sustain 与 amp_veltrack 收敛到 0..100", () => {
+    const { regions } = parseSfzText(`<region> sample=a.wav ampeg_sustain=200 amp_veltrack=-5`);
+    expect(regions[0].sustain).toBe(100);
+    expect(regions[0].ampVelTrack).toBe(0);
+  });
+
+  it("解析采样 offset 与 end 截取", () => {
+    const { regions } = parseSfzText(`<region> sample=a.wav offset=44100 end=88200`);
+    expect(regions[0].offset).toBe(44100);
+    expect(regions[0].end).toBe(88200);
+    const absent = parseSfzText(`<region> sample=a.wav`).regions[0];
+    expect(absent.offset).toBeUndefined();
+    expect(absent.end).toBeUndefined();
+  });
+
+  it("未给出的包络字段保持 undefined，缺省 sustain/ampVelTrack 不设", () => {
+    const { regions } = parseSfzText(`<region> sample=a.wav`);
+    expect(regions[0].attack).toBeUndefined();
+    expect(regions[0].decay).toBeUndefined();
+    expect(regions[0].sustain).toBeUndefined();
+    expect(regions[0].release).toBeUndefined();
+    expect(regions[0].ampVelTrack).toBeUndefined();
+  });
+
+  it("global/group 继承新的包络与力度字段", () => {
+    const { regions } = parseSfzText(`
+      <global> ampeg_release=0.8
+      <group> amp_veltrack=50
+      <region> sample=a.wav
+    `);
+    expect(regions[0]).toMatchObject({ release: 0.8, ampVelTrack: 50 });
+  });
+
   it("支持带引号的 sample 路径", () => {
     const { regions } = parseSfzText(`<region> sample="my samples/piano A.wav"`);
     expect(regions[0].samplePath).toBe("my samples/piano A.wav");

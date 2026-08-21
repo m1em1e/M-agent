@@ -74,12 +74,46 @@ export class SfzEngine {
       source.loopEnd = region.loopEnd / buffer.sampleRate;
     }
 
+    // 采样 offset/end 截取（sample 帧 → 秒）。
+    const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
+    const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
+    const playDuration = Math.max(0.001, endSec - offsetSec);
+
     const gainNode = this.context.createGain();
-    const level = Math.pow(10, region.volume / 20) * Math.max(0, Math.min(1, velocity / 127));
+
+    // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
+    const vel = Math.max(0, Math.min(1, velocity / 127));
+    let velocityFactor = vel;
+    const veltrack = region.ampVelTrack;
+    if (veltrack !== undefined && veltrack !== 100) {
+      const t = Math.max(0, Math.min(100, veltrack)) / 100;
+      velocityFactor = t * vel + (1 - t);
+    }
+    const peak = Math.pow(10, region.volume / 20) * velocityFactor;
+
+    // 完整 ADSR 包络。
     const attack = region.attack ?? 0.005;
+    const decay = region.decay ?? 0;
+    const sustainLevel = region.sustain !== undefined ? Math.max(0, region.sustain) / 100 : 1;
     const release = region.release ?? 0.1;
-    gainNode.gain.setValueAtTime(0.0001, now);
-    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, level), now + attack);
+    const t0 = now;
+    const tAttack = t0 + attack;
+    const tDecayEnd = tAttack + decay;
+    const stopAt = now + Math.max(0.02, durationMs / 1000);
+    const sustainGain = Math.max(0.0005, peak * sustainLevel);
+    const releaseStart = Math.max(tDecayEnd + 0.001, stopAt - release);
+
+    gainNode.gain.setValueAtTime(0.0001, t0);
+    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), tAttack);
+    if (decay > 0) {
+      gainNode.gain.exponentialRampToValueAtTime(sustainGain, tDecayEnd);
+    }
+    if (releaseStart >= stopAt) {
+      gainNode.gain.setValueAtTime(sustainGain, stopAt);
+    } else {
+      gainNode.gain.setValueAtTime(sustainGain, releaseStart);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+    }
 
     let output: AudioNode = gainNode;
     if (region.pan !== 0) {
@@ -91,16 +125,8 @@ export class SfzEngine {
     source.connect(gainNode);
     output.connect(this.context.destination);
 
-    const stopAt = now + Math.max(0.02, durationMs / 1000);
-    const releaseStart = Math.max(now + attack + 0.005, stopAt - release);
-    if (releaseStart >= stopAt) {
-      gainNode.gain.setValueAtTime(Math.max(0.001, level), stopAt);
-    } else {
-      gainNode.gain.setValueAtTime(Math.max(0.001, level), releaseStart);
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, stopAt);
-    }
-    source.start(now);
-    source.stop(stopAt + 0.05);
+    source.start(now, offsetSec, playDuration);
+    source.stop(Math.min(stopAt + 0.05, now + playDuration + 0.05));
 
     this.sources.add(source);
     source.onended = () => this.sources.delete(source);
