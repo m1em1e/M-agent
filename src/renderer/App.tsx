@@ -3250,7 +3250,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   <div className="instrument-select-menu" role="listbox" aria-label="选择音色">
                     <div className="instrument-select-search">
                       <input
-                        type="search"
+                        type="text"
+                        autoComplete="off"
                         placeholder="搜索音色…"
                         value={instrumentSelectQuery}
                         onChange={(event) => { setInstrumentSelectQuery(event.target.value); setInstrumentChoiceIndex(0); }}
