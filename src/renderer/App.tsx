@@ -1618,8 +1618,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instrumentLibrary, projectInstruments, selectedTrack?.program]);
 
-  /** 按搜索词过滤音色选项，返回扁平项列表（用于渲染与键盘导航）。 */
-  const filteredInstrumentOptions = useMemo(() => {
+  /** 按搜索词过滤音色选项，返回扁平项列表。每次渲染直接计算，确保搜索框任何改动（增/删/改）立即生效。 */
+  const filteredInstrumentOptions: Array<{ key: string; label: string; value: string; group: string }> = (() => {
     const query = instrumentSelectQuery.trim().toLowerCase();
     const match = (text: string) => !query || text.toLowerCase().includes(query);
     const out: Array<{ key: string; label: string; value: string; group: string }> = [];
@@ -1630,13 +1630,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
     }
     return out;
-  }, [instrumentGroups, instrumentSelectQuery]);
+  })();
 
   /** 统一渲染与键盘导航的展示列表：默认项 + 过滤后的音色项。 */
-  const instrumentDisplayOptions = useMemo(() => [
+  const instrumentDisplayOptions: Array<{ key: string; label: string; value: string; group: string }> = [
     { key: "none", label: "默认（振荡器）", value: "none", group: "" },
     ...filteredInstrumentOptions,
-  ], [filteredInstrumentOptions]);
+  ];
 
   const instrumentCurrentLabel = useMemo(() => {
     const instrument = selectedTrack?.instrument;
