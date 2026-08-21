@@ -3,12 +3,13 @@ import type { SfzRegion } from "../../shared/instrument.js";
 
 /**
  * SFZ 采样引擎：按 libraryId 缓存采样解码，按键区/力度区命中区域发声。
- * 与 SoundFontSynthHost 类似，作为 AudioEngine 的宿主组件存在；
- * 采样解码走 Chromium 内置 decodeAudioData（WAV/FLAC/OGG）。
+ * 支持真正的 noteOn / noteOff 延音：noteOn 进入 ADSR 的 attack→decay→sustain 保持，
+ * noteOff 时才进入 release；暂停/停止用 stopAll 立即切断。
  */
 export class SfzEngine {
   private readonly libraries = new Map<string, LoadedSfzLibrary>();
-  private readonly sources = new Set<AudioBufferSourceNode>();
+  /** 活动音符：`channel:note` → 该键上仍按住的发声（支持重叠，noteOff 释放最近一次）。 */
+  private readonly active = new Map<string, ActiveNote[]>();
 
   constructor(private readonly context: AudioContext) {}
 
@@ -22,13 +23,15 @@ export class SfzEngine {
     return this.libraries.has(libraryId);
   }
 
-  /** 按音符与力度触发命中区域（支持力度分层）。无命中或采样缺失时静默。 */
-  async play(libraryId: string, note: number, velocity: number, durationMs: number): Promise<void> {
+  /** 触发音符并保持（sustain），直到 noteOff 才释放。无命中或采样缺失时静默。 */
+  async noteOn(channel: number, note: number, velocity: number, libraryId: string): Promise<void> {
     const library = this.libraries.get(libraryId);
     if (!library) return;
     const matched = selectSfzRegions(library.regions, note, velocity);
     if (matched.length === 0) return;
     const now = this.context.currentTime;
+    const items: ActiveSource[] = [];
+    let releaseSeconds = 0.1;
     for (const region of matched) {
       let buffer: AudioBuffer;
       try {
@@ -36,19 +39,42 @@ export class SfzEngine {
       } catch {
         continue;
       }
-      this.triggerSource(region, buffer, note, velocity, durationMs, now);
+      const item = this.startSustainedSource(region, buffer, note, velocity, now);
+      if (item) {
+        items.push(item);
+        releaseSeconds = Math.max(releaseSeconds, region.release ?? 0.1);
+      }
     }
+    if (items.length === 0) return;
+    const key = `${channel}:${note}`;
+    const list = this.active.get(key) ?? [];
+    list.push({ items, releaseSeconds, startedAt: now });
+    this.active.set(key, list);
+  }
+
+  /** 释放指定键最近一次按住的音符（进入 release）。无活动音符时 no-op。 */
+  noteOff(channel: number, note: number): void {
+    const key = `${channel}:${note}`;
+    const list = this.active.get(key);
+    if (!list || list.length === 0) return;
+    const entry = list.pop()!;
+    if (list.length === 0) this.active.delete(key);
+    this.release(entry);
   }
 
   stopAll(): void {
-    for (const source of this.sources) {
-      try {
-        source.stop();
-      } catch {
-        // 已结束的节点忽略。
+    for (const list of this.active.values()) {
+      for (const entry of list) {
+        for (const item of entry.items) {
+          try {
+            item.source.stop();
+          } catch {
+            // 已结束的节点忽略。
+          }
+        }
       }
     }
-    this.sources.clear();
+    this.active.clear();
   }
 
   dispose(): void {
@@ -56,14 +82,14 @@ export class SfzEngine {
     this.libraries.clear();
   }
 
-  private triggerSource(
+  /** 创建持续发声的 source：ADSR attack→decay→sustain 保持（不自动 release）。 */
+  private startSustainedSource(
     region: SfzRegion,
     buffer: AudioBuffer,
     note: number,
     velocity: number,
-    durationMs: number,
     now: number,
-  ): void {
+  ): ActiveSource | null {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.playbackRate.value = 2 ** ((note - region.keyCenter + region.tuning / 100) / 12);
@@ -91,28 +117,16 @@ export class SfzEngine {
     }
     const peak = Math.pow(10, region.volume / 20) * velocityFactor;
 
-    // 完整 ADSR 包络。
+    // ADSR：attack→decay→sustain 保持（release 由 noteOff 触发）。
     const attack = region.attack ?? 0.005;
     const decay = region.decay ?? 0;
     const sustainLevel = region.sustain !== undefined ? Math.max(0, region.sustain) / 100 : 1;
-    const release = region.release ?? 0.1;
-    const t0 = now;
-    const tAttack = t0 + attack;
-    const tDecayEnd = tAttack + decay;
-    const stopAt = now + Math.max(0.02, durationMs / 1000);
     const sustainGain = Math.max(0.0005, peak * sustainLevel);
-    const releaseStart = Math.max(tDecayEnd + 0.001, stopAt - release);
 
-    gainNode.gain.setValueAtTime(0.0001, t0);
-    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), tAttack);
+    gainNode.gain.setValueAtTime(0.0001, now);
+    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), now + attack);
     if (decay > 0) {
-      gainNode.gain.exponentialRampToValueAtTime(sustainGain, tDecayEnd);
-    }
-    if (releaseStart >= stopAt) {
-      gainNode.gain.setValueAtTime(sustainGain, stopAt);
-    } else {
-      gainNode.gain.setValueAtTime(sustainGain, releaseStart);
-      gainNode.gain.exponentialRampToValueAtTime(0.0001, stopAt);
+      gainNode.gain.exponentialRampToValueAtTime(sustainGain, now + attack + decay);
     }
 
     let output: AudioNode = gainNode;
@@ -126,11 +140,39 @@ export class SfzEngine {
     output.connect(this.context.destination);
 
     source.start(now, offsetSec, playDuration);
-    source.stop(Math.min(stopAt + 0.05, now + playDuration + 0.05));
-
-    this.sources.add(source);
-    source.onended = () => this.sources.delete(source);
+    return { source, gain: gainNode };
   }
+
+  /** 让一组 source 进入 release（从当前 sustain 电平指数衰减到静音）。 */
+  private release(entry: ActiveNote): void {
+    const now = this.context.currentTime;
+    const end = now + Math.max(0.01, entry.releaseSeconds);
+    for (const item of entry.items) {
+      item.gain.gain.cancelScheduledValues(now);
+      try {
+        item.gain.gain.setValueAtTime(item.gain.gain.value, now);
+        item.gain.gain.exponentialRampToValueAtTime(0.0001, end);
+      } catch {
+        // 忽略调度异常（增益已为 0 等）。
+      }
+      try {
+        item.source.stop(end + 0.05);
+      } catch {
+        // 已结束。
+      }
+    }
+  }
+}
+
+interface ActiveSource {
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+}
+
+interface ActiveNote {
+  items: ActiveSource[];
+  releaseSeconds: number;
+  startedAt: number;
 }
 
 class LoadedSfzLibrary {

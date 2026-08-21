@@ -12,6 +12,8 @@ export class AudioEngine {
   private synthHost: SoundFontSynthHost | null = null;
   private sfzEngine: SfzEngine | null = null;
   private buffers = new Map<string, ArrayBuffer>();
+  /** 活动振荡器：`channel:note` → 当前发声节点。 */
+  private activeOscillators = new Map<string, { source: OscillatorNode; gain: GainNode }>();
 
   /** 获取（懒创建）AudioContext。 */
   private async ensureContext(): Promise<AudioContext> {
@@ -62,12 +64,11 @@ export class AudioEngine {
     this.sfzEngine.load(libraryId, regions, fetchBytes);
   }
 
-  /** 播放一个音符。trackInstrument 提供 soundfont/sfz 引用时走对应引擎，否则振荡器。 */
+  /** 播放一个音符（保持延音，由 noteOff 释放）。trackInstrument 提供 soundfont/sfz 引用时走对应引擎，否则振荡器。 */
   async noteOn(options: {
     channel: number;
     note: number;
     velocity: number;
-    durationMs?: number;
     volume: number;
     soundFont?: { libraryId: string; bank: number; program: number };
     sfz?: { libraryId: string };
@@ -75,52 +76,84 @@ export class AudioEngine {
   }): Promise<void> {
     const context = await this.ensureContext();
     await context.resume();
-    const gain = (options.velocity / 127) * Math.max(0, Math.min(1, options.volume)) * 0.9;
     if (options.soundFont && this.synthHost?.hasBank(options.soundFont.libraryId)) {
       this.synthHost.noteOn(options.channel, options.note, options.velocity, options.soundFont.bank, options.soundFont.program);
-      // SoundFont 音符在 noteOff 前会持续延音（sustain 型音色）。按时长调度释放，
-      // 避免暂停/停止后仍无限发声。
-      const durationMs = Math.max(0, options.durationMs ?? 200);
-      if (durationMs > 0) {
-        window.setTimeout(() => this.synthHost?.noteOff(options.channel, options.note), durationMs);
-      }
       return;
     }
     if (options.sfz && this.sfzEngine) {
-      await this.sfzEngine.play(options.sfz.libraryId, options.note, options.velocity, options.durationMs ?? 200);
+      await this.sfzEngine.noteOn(options.channel, options.note, options.velocity, options.sfz.libraryId);
       return;
     }
     if (options.oscillator === false) return;
-    this.playOscillator(context, options.note, gain, options.durationMs ?? 120);
+    this.noteOnOscillator(context, options.channel, options.note, options.velocity, options.volume);
   }
 
+  /** 释放音符（统一路由：SoundFont / SFZ / 振荡器各自释放，未活动时 no-op）。 */
   noteOff(channel: number, note: number): void {
     this.synthHost?.noteOff(channel, note);
+    this.sfzEngine?.noteOff(channel, note);
+    const key = `${channel}:${note}`;
+    const entry = this.activeOscillators.get(key);
+    if (entry) {
+      this.releaseOscillator(entry);
+      this.activeOscillators.delete(key);
+    }
   }
 
   stopAll(): void {
     this.synthHost?.stopAll();
     this.sfzEngine?.stopAll();
+    for (const entry of this.activeOscillators.values()) {
+      this.releaseOscillator(entry, 0.01);
+    }
+    this.activeOscillators.clear();
   }
 
-  private playOscillator(context: AudioContext, note: number, gain: number, durationMs: number): void {
-    const oscillator = context.createOscillator();
+  private noteOnOscillator(context: AudioContext, channel: number, note: number, velocity: number, volume: number): void {
+    const key = `${channel}:${note}`;
+    // 同键重复触发：先停旧的再起新的。
+    const existing = this.activeOscillators.get(key);
+    if (existing) {
+      this.releaseOscillator(existing);
+      this.activeOscillators.delete(key);
+    }
+    const source = context.createOscillator();
     const gainNode = context.createGain();
-    oscillator.type = "triangle";
-    oscillator.frequency.value = 440 * 2 ** ((note - 69) / 12);
+    source.type = "triangle";
+    source.frequency.value = 440 * 2 ** ((note - 69) / 12);
     const now = context.currentTime;
-    const volume = gain * 0.05;
+    const level = (velocity / 127) * Math.max(0, Math.min(1, volume)) * 0.05;
     gainNode.gain.setValueAtTime(0.0001, now);
-    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, volume), now + 0.006);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, now + durationMs / 1000);
-    oscillator.connect(gainNode).connect(context.destination);
-    oscillator.start(now);
-    oscillator.stop(now + durationMs / 1000 + 0.02);
+    gainNode.gain.exponentialRampToValueAtTime(Math.max(0.001, level), now + 0.006);
+    source.connect(gainNode).connect(context.destination);
+    source.start(now);
+    this.activeOscillators.set(key, { source, gain: gainNode });
+  }
+
+  private releaseOscillator(entry: { source: OscillatorNode; gain: GainNode }, releaseSeconds = 0.06): void {
+    const now = this.context?.currentTime ?? 0;
+    const end = now + Math.max(0.01, releaseSeconds);
+    try {
+      entry.gain.gain.cancelScheduledValues(now);
+      entry.gain.gain.setValueAtTime(entry.gain.gain.value, now);
+      entry.gain.gain.exponentialRampToValueAtTime(0.0001, end);
+    } catch {
+      // 忽略调度异常。
+    }
+    try {
+      entry.source.stop(end + 0.02);
+    } catch {
+      // 已结束。
+    }
   }
 
   dispose(): void {
     this.synthHost?.stopAll();
     this.sfzEngine?.dispose();
+    for (const entry of this.activeOscillators.values()) {
+      this.releaseOscillator(entry, 0.01);
+    }
+    this.activeOscillators.clear();
     this.context?.close().catch(() => undefined);
     this.context = null;
     this.synthHost = null;

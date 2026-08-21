@@ -287,6 +287,10 @@ const isMissingProjectError = (error: unknown): boolean => {
   return message.includes("PROJECT_MISSING");
 };
 
+/** 音符时长（tick → 毫秒），用于试听延音；钳制到合理范围避免过短/过长。 */
+const noteDurationMs = (note: { durationTicks: number }, ppq: number, tempo: number): number =>
+  Math.max(80, Math.min(8000, (note.durationTicks / ppq) * (60000 / tempo)));
+
 const pattern = (
   pitches: number[],
   every: number,
@@ -1642,8 +1646,6 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   /** 音色搜索框任意改动（增/删/改）→ 更新关键词 + 过滤结果 state。 */
   const handleInstrumentQueryChange = (value: string) => {
-    // eslint-disable-next-line no-console
-    console.log("[instrument-search]", JSON.stringify(value));
     setInstrumentSelectQuery(value);
     setInstrumentFiltered(filterInstruments(value));
     setInstrumentChoiceIndex(0);
@@ -1792,43 +1794,62 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   };
 
   /** 按 track 的音源引用播放一个音符；无引用或音源不可用时回退振荡器。 */
+  /** 解析轨道音源：加载引擎并返回可路由的音源引用（soundfont/sfz）。 */
+  const resolveTrackInstrument = useCallback(async (track: MidiTrack): Promise<{
+    soundFont?: { libraryId: string; bank: number; program: number };
+    sfz?: { libraryId: string };
+  }> => {
+    const engine = getAudioEngine();
+    if (!engine) return {};
+    const entry = track.instrument ? findInstrumentEntry(track.instrument.libraryId) : undefined;
+    const usable = Boolean(entry && entry.enabled);
+    if (track.instrument?.type === "soundfont" && usable && entry) {
+      await engine.loadSoundFont(track.instrument.libraryId, entry.path, async (path) => {
+        if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
+        return magent.readInstrumentFile(path);
+      });
+    }
+    if (track.instrument?.type === "sfz" && usable && entry) {
+      await engine.loadSfz(track.instrument.libraryId, entry.sfzRegions ?? [], async (path) => {
+        if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
+        return magent.readInstrumentFile(path);
+      });
+    }
+    return {
+      soundFont: track.instrument?.type === "soundfont" && usable
+        ? { libraryId: track.instrument.libraryId, bank: track.instrument.bank, program: track.instrument.program }
+        : undefined,
+      sfz: track.instrument?.type === "sfz" && usable ? { libraryId: track.instrument.libraryId } : undefined,
+    };
+  }, [findInstrumentEntry, getAudioEngine, magent]);
+
+  /** 试听音符：noteOn 后按音符时长延时释放（延音到音符结束）。 */
   const playTrackNote = useCallback(async (track: MidiTrack, note: MidiNote, durationMs: number) => {
     const engine = getAudioEngine();
     if (!engine) return;
     try {
-      const entry = track.instrument ? findInstrumentEntry(track.instrument.libraryId) : undefined;
-      const usable = Boolean(entry && entry.enabled);
-      if (track.instrument?.type === "soundfont" && usable && entry) {
-        await engine.loadSoundFont(track.instrument.libraryId, entry.path, async (path) => {
-          if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
-          return magent.readInstrumentFile(path);
-        });
-      }
-      if (track.instrument?.type === "sfz" && usable && entry) {
-        await engine.loadSfz(track.instrument.libraryId, entry.sfzRegions ?? [], async (path) => {
-          if (!magent?.readInstrumentFile) throw new Error("桌面音源桥尚未连接");
-          return magent.readInstrumentFile(path);
-        });
-      }
+      const ref = await resolveTrackInstrument(track);
       await engine.noteOn({
         channel: track.channel,
         note: note.pitch,
         velocity: note.velocity,
-        durationMs,
         volume: track.volume ?? 1,
-        soundFont: track.instrument?.type === "soundfont" && usable
-          ? {
-              libraryId: track.instrument.libraryId,
-              bank: track.instrument.bank,
-              program: track.instrument.program,
-            }
-          : undefined,
-        sfz: track.instrument?.type === "sfz" && usable ? { libraryId: track.instrument.libraryId } : undefined,
+        soundFont: ref.soundFont,
+        sfz: ref.sfz,
       });
+      if (durationMs > 0) {
+        window.setTimeout(() => engine.noteOff(track.channel, note.pitch), durationMs);
+      }
     } catch {
       // Audition is optional; editing remains available when audio is unavailable.
     }
-  }, [findInstrumentEntry, getAudioEngine, magent]);
+  }, [getAudioEngine, resolveTrackInstrument]);
+
+  /** 在周期（循环区长度或整曲长度）内，返回 anchor 之后的最近触发 tick。 */
+  const nextCycleTick = useCallback((anchor: number, previousTick: number, period: number): number => {
+    if (previousTick < anchor) return anchor;
+    return anchor + (Math.floor((previousTick - anchor) / period) + 1) * period;
+  }, []);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -1849,11 +1870,31 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         const period = loop ? loop.endTick - loop.startTick : maxTick;
         for (const note of track.notes) {
           if (loop && (note.startTick < loop.startTick || note.startTick >= loop.endTick)) continue;
-          const triggerTick = previous < note.startTick
-            ? note.startTick
-            : note.startTick + (Math.floor((previous - note.startTick) / period) + 1) * period;
-          if (triggerTick > previous && triggerTick <= tick) {
-            void playTrackNote(track, note, Math.min(8000, (note.durationTicks / projectPpq) * (60000 / tempo)));
+          // 音符开始：进入 → noteOn（保持延音，直到结束 tick 才 noteOff）。
+          const onTick = nextCycleTick(note.startTick, previous, period);
+          if (onTick > previous && onTick <= tick) {
+            void (async () => {
+              try {
+                const engine = getAudioEngine();
+                if (!engine) return;
+                const ref = await resolveTrackInstrument(track);
+                await engine.noteOn({
+                  channel: track.channel,
+                  note: note.pitch,
+                  velocity: note.velocity,
+                  volume: track.volume ?? 1,
+                  soundFont: ref.soundFont,
+                  sfz: ref.sfz,
+                });
+              } catch {
+                // 播放可选；音频不可用时编辑仍可用。
+              }
+            })();
+          }
+          // 音符结束：退出 → noteOff（统一释放 SoundFont / SFZ / 振荡器）。
+          const offTick = nextCycleTick(note.startTick + note.durationTicks, previous, period);
+          if (offTick > previous && offTick <= tick) {
+            getAudioEngine()?.noteOff(track.channel, note.pitch);
           }
         }
       });
@@ -1863,7 +1904,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
-  }, [isPlaying, playTrackNote, projectPpq, tempo, tracks]);
+  }, [getAudioEngine, isPlaying, nextCycleTick, projectPpq, resolveTrackInstrument, tempo, tracks]);
 
   // 暂停/停止时立即切断所有发声，避免 SoundFont 延音残留。
   useEffect(() => {
@@ -1929,7 +1970,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const hit = noteAtPoint(x, y);
     if (hit) {
       setSelectedNoteId(hit.id);
-      void playTrackNote(selectedTrack, hit, 160);
+      void playTrackNote(selectedTrack, hit, noteDurationMs(hit, projectPpq, tempo));
       const noteX = KEY_WIDTH + (hit.startTick / projectPpq) * beatWidth;
       const noteW = Math.max(4, (hit.durationTicks / projectPpq) * beatWidth - 2);
       setDrag({
@@ -1953,7 +1994,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       };
       commitTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, notes: [...track.notes, note] } : track));
       setSelectedNoteId(note.id);
-      void playTrackNote(selectedTrack, note, 160);
+      void playTrackNote(selectedTrack, note, noteDurationMs(note, projectPpq, tempo));
     } else {
       setSelectedNoteId(null);
     }
@@ -2074,7 +2115,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const note: MidiNote = { id: uid("note"), pitch: pitchAtY(y), startTick: Math.max(0, tickAtX(x)), durationTicks: projectPpq, velocity: 88 };
     commitTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, notes: [...track.notes, note] } : track));
     setSelectedNoteId(note.id);
-    void playTrackNote(selectedTrack, note, 160);
+    void playTrackNote(selectedTrack, note, noteDurationMs(note, projectPpq, tempo));
   };
 
   const addTrack = () => {
