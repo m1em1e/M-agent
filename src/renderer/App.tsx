@@ -851,6 +851,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [instrumentMenuOpen, setInstrumentMenuOpen] = useState(false);
   const [instrumentSelectQuery, setInstrumentSelectQuery] = useState("");
   const [instrumentChoiceIndex, setInstrumentChoiceIndex] = useState(0);
+  const [instrumentFiltered, setInstrumentFiltered] = useState<Array<{ key: string; label: string; value: string; group: string }>>([]);
   const instrumentMenuRef = useRef<HTMLDivElement>(null);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
   const [providersView, setProvidersView] = useState<"list" | "edit">("list");
@@ -1617,9 +1618,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     return groups;
   })();
 
-  /** 按搜索词过滤音色选项，返回扁平项列表。每次渲染直接计算，确保搜索框任何改动（增/删/改）立即生效。 */
-  const filteredInstrumentOptions: Array<{ key: string; label: string; value: string; group: string }> = (() => {
-    const query = instrumentSelectQuery.trim().toLowerCase();
+  /** 按搜索词过滤音色选项，返回扁平项列表（供 onInput 显式写入 state，保证每次输入即时刷新）。 */
+  const filterInstruments = (queryText: string): Array<{ key: string; label: string; value: string; group: string }> => {
+    const query = queryText.trim().toLowerCase();
     const match = (text: string) => !query || text.toLowerCase().includes(query);
     const out: Array<{ key: string; label: string; value: string; group: string }> = [];
     for (const group of instrumentGroups) {
@@ -1629,12 +1630,12 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
     }
     return out;
-  })();
+  };
 
-  /** 统一渲染与键盘导航的展示列表：默认项 + 过滤后的音色项。 */
+  /** 统一渲染与键盘导航的展示列表：默认项 + 过滤结果（来自 state，输入即更新）。 */
   const instrumentDisplayOptions: Array<{ key: string; label: string; value: string; group: string }> = [
     { key: "none", label: "默认（振荡器）", value: "none", group: "" },
-    ...filteredInstrumentOptions,
+    ...instrumentFiltered,
   ];
 
   const instrumentCurrentLabel = useMemo(() => {
@@ -3242,7 +3243,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <label><span>音量</span><input type="range" min="0" max="1" step="0.01" value={selectedTrack?.volume ?? 1} onChange={(event) => updateTrack(selectedTrackId, { volume: Number(event.target.value) })} /></label>
             <label><span>音色</span>
               <div className="instrument-select" ref={instrumentMenuRef}>
-                <button type="button" className="instrument-select-trigger" aria-expanded={instrumentMenuOpen} aria-haspopup="listbox" onClick={() => setInstrumentMenuOpen((value) => !value)}>
+                <button type="button" className="instrument-select-trigger" aria-expanded={instrumentMenuOpen} aria-haspopup="listbox" onClick={() => { setInstrumentMenuOpen((value) => { const next = !value; if (next) setInstrumentFiltered(filterInstruments(instrumentSelectQuery)); return next; }); }}>
                   <span className="instrument-select-label">{instrumentCurrentLabel}</span><span className="instrument-select-caret">▾</span>
                 </button>
                 {instrumentMenuOpen && (
@@ -3253,7 +3254,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         autoComplete="off"
                         placeholder="搜索音色…"
                         value={instrumentSelectQuery}
-                        onInput={(event) => { setInstrumentSelectQuery(event.currentTarget.value); setInstrumentChoiceIndex(0); }}
+                        onInput={(event) => { const value = event.currentTarget.value; setInstrumentSelectQuery(value); setInstrumentFiltered(filterInstruments(value)); setInstrumentChoiceIndex(0); }}
                         onKeyDown={(event) => {
                           if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, instrumentDisplayOptions.length - 1)); }
                           else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
