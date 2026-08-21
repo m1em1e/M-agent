@@ -1569,8 +1569,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     return undefined;
   }, [instrumentLibrary, projectInstruments]);
 
-  /** 可搜索音色选项：默认 + SoundFont 分组（音源 → preset 子项）+ SFZ 项。 */
-  const instrumentGroups = useMemo(() => {
+  /** 可搜索音色选项：默认 + SoundFont 分组（音源 → preset 子项）+ SFZ 项。每次渲染直接计算。 */
+  const instrumentGroups: Array<{ type: "flat" | "group"; label: string; options: Array<{ key: string; label: string; value: string; project: boolean }> }> = (() => {
     const soundFontEntries = [
       ...instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled),
       ...projectInstruments.filter((entry) => entry.type === "soundfont"),
@@ -1615,8 +1615,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       });
     }
     return groups;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instrumentLibrary, projectInstruments, selectedTrack?.program]);
+  })();
 
   /** 按搜索词过滤音色选项，返回扁平项列表。每次渲染直接计算，确保搜索框任何改动（增/删/改）立即生效。 */
   const filteredInstrumentOptions: Array<{ key: string; label: string; value: string; group: string }> = (() => {
@@ -3254,7 +3253,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         autoComplete="off"
                         placeholder="搜索音色…"
                         value={instrumentSelectQuery}
-                        onChange={(event) => { setInstrumentSelectQuery(event.target.value); setInstrumentChoiceIndex(0); }}
+                        onInput={(event) => { setInstrumentSelectQuery(event.currentTarget.value); setInstrumentChoiceIndex(0); }}
                         onKeyDown={(event) => {
                           if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, instrumentDisplayOptions.length - 1)); }
                           else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
