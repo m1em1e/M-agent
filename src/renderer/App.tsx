@@ -848,6 +848,10 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [subscriptions, setSubscriptions] = useState<SubscriptionSummary[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelSelectRef = useRef<HTMLDivElement>(null);
+  const [instrumentMenuOpen, setInstrumentMenuOpen] = useState(false);
+  const [instrumentSelectQuery, setInstrumentSelectQuery] = useState("");
+  const [instrumentChoiceIndex, setInstrumentChoiceIndex] = useState(0);
+  const instrumentMenuRef = useRef<HTMLDivElement>(null);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
   const [providersView, setProvidersView] = useState<"list" | "edit">("list");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
@@ -1330,6 +1334,22 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
   }, [modelMenuOpen]);
 
+  useEffect(() => {
+    if (!instrumentMenuOpen) return;
+    const closeOnClickOutside = (event: MouseEvent) => {
+      if (instrumentMenuRef.current && !instrumentMenuRef.current.contains(event.target as Node)) setInstrumentMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInstrumentMenuOpen(false);
+    };
+    window.addEventListener("mousedown", closeOnClickOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("mousedown", closeOnClickOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [instrumentMenuOpen]);
+
   useLayoutEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = RULER_HEIGHT + (MAX_PITCH - 84) * ROW_HEIGHT;
@@ -1537,17 +1557,106 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   };
 
   /** 解析音源条目：工程级优先，回退系统级。 */
-  const findInstrumentEntry = useCallback((id: string): { path: string; enabled: boolean; presets?: InstrumentLibrarySummary["presets"]; sfzRegions?: InstrumentLibrarySummary["sfzRegions"] } | undefined => {
+  const findInstrumentEntry = useCallback((id: string): { path: string; enabled: boolean; name?: string; presets?: InstrumentLibrarySummary["presets"]; sfzRegions?: InstrumentLibrarySummary["sfzRegions"] } | undefined => {
     const projectEntry = projectInstruments.find((entry) => entry.id === id);
     if (projectEntry) {
-      return { path: projectEntry.path, enabled: true, presets: projectEntry.presets, sfzRegions: projectEntry.sfzRegions };
+      return { path: projectEntry.path, enabled: true, name: projectEntry.name, presets: projectEntry.presets, sfzRegions: projectEntry.sfzRegions };
     }
     const systemEntry = instrumentLibrary.find((entry) => entry.id === id);
     if (systemEntry) {
-      return { path: systemEntry.path, enabled: systemEntry.enabled, presets: systemEntry.presets, sfzRegions: systemEntry.sfzRegions };
+      return { path: systemEntry.path, enabled: systemEntry.enabled, name: systemEntry.name, presets: systemEntry.presets, sfzRegions: systemEntry.sfzRegions };
     }
     return undefined;
   }, [instrumentLibrary, projectInstruments]);
+
+  /** 可搜索音色选项：默认 + SoundFont 分组（音源 → preset 子项）+ SFZ 项。 */
+  const instrumentGroups = useMemo(() => {
+    const soundFontEntries = [
+      ...instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled),
+      ...projectInstruments.filter((entry) => entry.type === "soundfont"),
+    ];
+    const sfzEntries = [
+      ...instrumentLibrary.filter((entry) => entry.type === "sfz" && entry.enabled),
+      ...projectInstruments.filter((entry) => entry.type === "sfz"),
+    ];
+    const groups: Array<{ type: "flat" | "group"; label: string; options: Array<{ key: string; label: string; value: string; project: boolean }> }> = [];
+    for (const entry of soundFontEntries) {
+      const isProject = projectInstruments.some((item) => item.id === entry.id);
+      const presets = entry.presets ?? [];
+      if (presets.length === 0) {
+        groups.push({
+          type: "flat",
+          label: "",
+          options: [{ key: entry.id, label: `${entry.name}${isProject ? "（工程）" : ""} · Program ${selectedTrack?.program ?? 0}`, value: `soundfont:${entry.id}:0:${selectedTrack?.program ?? 0}`, project: isProject }],
+        });
+      } else {
+        groups.push({
+          type: "group",
+          label: `${entry.name}${isProject ? "（工程）" : ""}`,
+          options: presets.map((preset) => ({
+            key: `${entry.id}:${preset.bank}:${preset.program}`,
+            label: preset.name,
+            value: `soundfont:${entry.id}:${preset.bank}:${preset.program}`,
+            project: isProject,
+          })),
+        });
+      }
+    }
+    if (sfzEntries.length > 0) {
+      groups.push({
+        type: "flat",
+        label: "",
+        options: sfzEntries.map((entry) => ({
+          key: entry.id,
+          label: `${entry.name}${projectInstruments.some((item) => item.id === entry.id) ? "（工程）" : ""}`,
+          value: `sfz:${entry.id}`,
+          project: projectInstruments.some((item) => item.id === entry.id),
+        })),
+      });
+    }
+    return groups;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrumentLibrary, projectInstruments, selectedTrack?.program]);
+
+  /** 按搜索词过滤音色选项，返回扁平项列表（用于渲染与键盘导航）。 */
+  const filteredInstrumentOptions = useMemo(() => {
+    const query = instrumentSelectQuery.trim().toLowerCase();
+    const match = (text: string) => !query || text.toLowerCase().includes(query);
+    const out: Array<{ key: string; label: string; value: string; group: string }> = [];
+    for (const group of instrumentGroups) {
+      for (const option of group.options) {
+        if (!match(option.label) && !match(group.label)) continue;
+        out.push({ key: option.key, label: option.label, value: option.value, group: group.label });
+      }
+    }
+    return out;
+  }, [instrumentGroups, instrumentSelectQuery]);
+
+  const instrumentCurrentLabel = useMemo(() => {
+    const instrument = selectedTrack?.instrument;
+    if (!instrument) return "默认（振荡器）";
+    const entry = findInstrumentEntry(instrument.libraryId);
+    if (instrument.type === "soundfont") {
+      const preset = entry?.presets?.find((item) => item.bank === instrument.bank && item.program === instrument.program);
+      return preset?.name ?? `${entry?.name ?? instrument.libraryId} · Program ${instrument.program}`;
+    }
+    return entry?.name ?? instrument.libraryId;
+  }, [selectedTrack?.instrument, findInstrumentEntry]);
+
+  const applyInstrumentValue = (value: string) => {
+    setInstrumentMenuOpen(false);
+    if (value === "none") { updateTrack(selectedTrackId, { instrument: undefined }); return; }
+    if (value.startsWith("sfz:")) {
+      updateTrack(selectedTrackId, { instrument: { type: "sfz", libraryId: value.slice("sfz:".length) } });
+      return;
+    }
+    const parts = value.slice("soundfont:".length).split(":");
+    const libraryId = parts[0];
+    const bank = Number(parts[1]);
+    const program = Number(parts[2]);
+    updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId, bank, program } });
+  };
+
 
   const bindProjectInstrumentPaths = async (paths: string[], label: string) => {
     if (!magent?.bindInstrumentToProject) return showToast("桌面音源桥尚未连接");
@@ -3127,38 +3236,47 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             <label><span>角色</span><select value={selectedTrack?.role ?? "other"} onChange={(event) => updateTrack(selectedTrackId, { role: event.target.value as TrackRole })}><option value="melody">Melody</option><option value="harmony">Harmony</option><option value="bass">Bass</option><option value="drums">Drums</option><option value="other">Other</option></select></label>
             <label><span>音量</span><input type="range" min="0" max="1" step="0.01" value={selectedTrack?.volume ?? 1} onChange={(event) => updateTrack(selectedTrackId, { volume: Number(event.target.value) })} /></label>
             <label><span>音色</span>
-              <select value={selectedTrack?.instrument?.type === "soundfont" ? `soundfont:${selectedTrack.instrument.libraryId}:${selectedTrack.instrument.bank}:${selectedTrack.instrument.program}` : selectedTrack?.instrument?.type === "sfz" ? `sfz:${selectedTrack.instrument.libraryId}` : "none"} onChange={(event) => {
-                const value = event.target.value;
-                if (value === "none") { updateTrack(selectedTrackId, { instrument: undefined }); return; }
-                if (value.startsWith("sfz:")) {
-                  updateTrack(selectedTrackId, { instrument: { type: "sfz", libraryId: value.slice("sfz:".length) } });
-                  return;
-                }
-                const parts = value.slice("soundfont:".length).split(":");
-                const libraryId = parts[0];
-                const bank = Number(parts[1]);
-                const program = Number(parts[2]);
-                updateTrack(selectedTrackId, { instrument: { type: "soundfont", libraryId, bank, program } });
-              }}>
-                <option value="none">默认（振荡器）</option>
-                {[...instrumentLibrary.filter((entry) => entry.type === "soundfont" && entry.enabled), ...projectInstruments.filter((entry) => entry.type === "soundfont")].map((entry) => {
-                  const isProject = projectInstruments.some((item) => item.id === entry.id);
-                  const presets = entry.presets ?? [];
-                  if (presets.length === 0) {
-                    return <option key={entry.id} value={`soundfont:${entry.id}:0:${selectedTrack?.program ?? 0}`}>{entry.name}{isProject ? "（工程）" : ""} · Program {selectedTrack?.program ?? 0}</option>;
-                  }
-                  return (
-                    <optgroup key={entry.id} label={`${entry.name}${isProject ? "（工程）" : ""}`}>
-                      {presets.map((preset) => (
-                        <option key={`${entry.id}:${preset.bank}:${preset.program}`} value={`soundfont:${entry.id}:${preset.bank}:${preset.program}`}>{preset.name}</option>
+              <div className="instrument-select" ref={instrumentMenuRef}>
+                <button type="button" className="instrument-select-trigger" aria-expanded={instrumentMenuOpen} aria-haspopup="listbox" onClick={() => setInstrumentMenuOpen((value) => !value)}>
+                  <span className="instrument-select-label">{instrumentCurrentLabel}</span><span className="instrument-select-caret">▾</span>
+                </button>
+                {instrumentMenuOpen && (
+                  <div className="instrument-select-menu" role="listbox" aria-label="选择音色">
+                    <div className="instrument-select-search">
+                      <input
+                        type="search"
+                        placeholder="搜索音色…"
+                        value={instrumentSelectQuery}
+                        onChange={(event) => { setInstrumentSelectQuery(event.target.value); setInstrumentChoiceIndex(0); }}
+                        onKeyDown={(event) => {
+                          if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, filteredInstrumentOptions.length)); }
+                          else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
+                          else if (event.key === "Enter") { event.preventDefault(); const target = filteredInstrumentOptions[instrumentChoiceIndex]; if (target) applyInstrumentValue(target.value); }
+                          else if (event.key === "Escape") { setInstrumentMenuOpen(false); }
+                        }}
+                      />
+                    </div>
+                    <div className="instrument-select-options">
+                      <button type="button" role="option" aria-selected={!selectedTrack?.instrument} className={!selectedTrack?.instrument ? "active" : ""} onClick={() => applyInstrumentValue("none")}>默认（振荡器）</button>
+                      {filteredInstrumentOptions.map((option, index) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          role="option"
+                          aria-selected={index === instrumentChoiceIndex}
+                          className={index === instrumentChoiceIndex ? "active" : ""}
+                          onClick={() => applyInstrumentValue(option.value)}
+                        >
+                          {option.label}
+                        </button>
                       ))}
-                    </optgroup>
-                  );
-                })}
-                {[...instrumentLibrary.filter((entry) => entry.type === "sfz" && entry.enabled), ...projectInstruments.filter((entry) => entry.type === "sfz")].map((entry) => (
-                  <option key={entry.id} value={`sfz:${entry.id}`}>{entry.name}{projectInstruments.some((item) => item.id === entry.id) ? "（工程）" : ""}</option>
-                ))}
-              </select>
+                      {filteredInstrumentOptions.length === 0 && (
+                        <div className="instrument-select-empty">无匹配音色</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </label>
             {selectedTrack?.instrument?.type === "soundfont" && (
               <label><span>音色号</span>

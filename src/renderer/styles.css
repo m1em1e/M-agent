@@ -899,6 +899,39 @@ body.workspace-resizing, body.workspace-resizing * { cursor: col-resize !importa
 }
 .model-select-menu button:hover { background: var(--surface-hover); color: var(--text); }
 .model-select-menu button.active { background: var(--accent-soft); color: var(--accent); }
+
+.instrument-select { position: relative; }
+.instrument-select-trigger {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0;
+  padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: 5px;
+  background: var(--surface-input); color: var(--text); font-size: 10px; text-align: left; cursor: pointer;
+}
+.instrument-select-trigger:hover { border-color: var(--line-strong); color: var(--text); }
+.instrument-select-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.instrument-select-trigger .instrument-select-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.instrument-select-trigger .instrument-select-caret { color: var(--dim); }
+.instrument-select-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
+  display: grid; grid-template-rows: auto minmax(0, 1fr);
+  width: 100%; min-width: 200px; max-width: 300px; max-height: 260px;
+  padding: 4px; border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--surface-modal); box-shadow: 0 -12px 30px var(--shadow);
+}
+.instrument-select-search { padding: 2px 2px 5px; }
+.instrument-select-search input {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 4px;
+  background: var(--surface-input); color: var(--text); font-size: 10px;
+}
+.instrument-select-search input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
+.instrument-select-options { overflow-y: auto; scrollbar-width: thin; }
+.instrument-select-options button {
+  display: block; width: 100%; min-width: 0; padding: 6px 8px; border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted); font-size: 10px; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+}
+.instrument-select-options button:hover { background: var(--surface-hover); color: var(--text); }
+.instrument-select-options button.active { background: var(--accent-soft); color: var(--accent); }
+.instrument-select-empty { padding: 12px 8px; color: var(--dim); font-size: 10px; text-align: center; }
 .prompt-area textarea { width: 100%; height: 56px; resize: none; border: 0; padding: 5px 34px 2px 3px; background: transparent; color: #c8cbc3; font-size: 10px; line-height: 1.45; }
 .prompt-area textarea::placeholder { color: #505653; }
 .prompt-area textarea:focus { outline: 0; }
