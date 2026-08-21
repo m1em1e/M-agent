@@ -1642,15 +1642,23 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   /** 音色搜索框任意改动（增/删/改）→ 更新关键词 + 过滤结果 state。 */
   const handleInstrumentQueryChange = (value: string) => {
-    // eslint-disable-next-line no-console
-    console.log("[instrument-search]", JSON.stringify(value));
     setInstrumentSelectQuery(value);
-    const filtered = filterInstruments(value);
-    // eslint-disable-next-line no-console
-    console.log("[instrument-search] filtered", filtered.length, filtered.map((item) => item.label));
-    setInstrumentFiltered(filtered);
+    setInstrumentFiltered(filterInstruments(value));
     setInstrumentChoiceIndex(0);
   };
+
+  // 用原生 input 事件监听搜索框（绕开 React 合成事件系统，确保任何输入都触发）。
+  useEffect(() => {
+    if (!instrumentMenuOpen) return;
+    const el = instrumentSearchRef.current;
+    if (!el) return;
+    const onNativeInput = (event: Event) => {
+      handleInstrumentQueryChange((event.target as HTMLInputElement).value);
+    };
+    el.addEventListener("input", onNativeInput);
+    return () => el.removeEventListener("input", onNativeInput);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instrumentMenuOpen]);
 
   const instrumentCurrentLabel = useMemo(() => {
     const instrument = selectedTrack?.instrument;
@@ -3268,9 +3276,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                         type="text"
                         autoComplete="off"
                         placeholder="搜索音色…"
-                        value={instrumentSelectQuery}
-                        onChange={(event) => handleInstrumentQueryChange(event.target.value)}
-                        onInput={(event) => handleInstrumentQueryChange(event.currentTarget.value)}
+                        defaultValue={instrumentSelectQuery}
                         onKeyDown={(event) => {
                           if (event.key === "ArrowDown") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.min(i + 1, instrumentDisplayOptions.length - 1)); }
                           else if (event.key === "ArrowUp") { event.preventDefault(); setInstrumentChoiceIndex((i) => Math.max(i - 1, 0)); }
