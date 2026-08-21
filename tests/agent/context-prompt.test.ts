@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_CONTEXT_PROMPT } from "../../src/core/agent/context-prompt";
+import { readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const promptPath = join(currentDir, "../../agent/context-prompt.md");
+
+async function contextPrompt(): Promise<string> {
+  return readFile(promptPath, "utf8");
+}
 
 describe("agent context prompt", () => {
-  it("documents the project file format for the model", () => {
+  it("documents the project file format for the model", async () => {
+    const prompt = await contextPrompt();
     for (const fragment of [
       "M Agent",
       "ppq",
@@ -33,20 +43,29 @@ describe("agent context prompt", () => {
       "10,000",
       "3",
     ]) {
-      expect(AGENT_CONTEXT_PROMPT).toContain(fragment);
+      expect(prompt).toContain(fragment);
     }
   });
 
-  it("keeps the boundary language consistent with the kernel", () => {
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/永远不能直接改写工程/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/简体中文/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/禁止编造/);
+  it("keeps the boundary language consistent with the kernel", async () => {
+    const prompt = await contextPrompt();
+    expect(prompt).toMatch(/永远不能直接改写工程/);
+    expect(prompt).toMatch(/简体中文/);
+    expect(prompt).toMatch(/禁止编造/);
   });
 
-  it("documents instrument search and set-instrument capability", () => {
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/instrument_search/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/create_track/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/update_track/);
-    expect(AGENT_CONTEXT_PROMPT).toMatch(/不得编造音色引用|不得编造/);
+  it("documents instrument search and set-instrument capability", async () => {
+    const prompt = await contextPrompt();
+    expect(prompt).toMatch(/instrument_search/);
+    expect(prompt).toMatch(/create_track/);
+    expect(prompt).toMatch(/update_track/);
+    expect(prompt).toMatch(/不得编造音色引用|不得编造/);
+  });
+
+  it("documents SFZ and SoundFont instrument reference formats", async () => {
+    const prompt = await contextPrompt();
+    expect(prompt).toMatch(/"type": "sfz"/);
+    expect(prompt).toMatch(/"type": "soundfont"/);
+    expect(prompt).toMatch(/无 bank\/program/);
   });
 });

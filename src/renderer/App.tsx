@@ -829,6 +829,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [resizingPane, setResizingPane] = useState<WorkspacePane | null>(null);
   const [instrumentLibrary, setInstrumentLibrary] = useState<InstrumentLibrarySummary[]>([]);
   const [instrumentLibraryLoaded, setInstrumentLibraryLoaded] = useState(false);
+  const [instrumentQuery, setInstrumentQuery] = useState("");
   const [instrumentDropActive, setInstrumentDropActive] = useState(false);
   const [recommendedDownloadBusy, setRecommendedDownloadBusy] = useState(false);
   const [instrumentWarningDismissed, setInstrumentWarningDismissed] = useState(() => {
@@ -3836,8 +3837,15 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   {soundView === "list" ? (
                     <>
                       <div className="subscription-toolbar">
-                        <div>
+                        <div className="instrument-search-row">
                           <button className="quiet-button" onClick={() => void loadInstrumentLibrary()}><Icon name="spark" size={13} />扫描音源库</button>
+                          <input
+                            className="instrument-search-input"
+                            type="search"
+                            placeholder="搜索音源…"
+                            value={instrumentQuery}
+                            onChange={(event) => setInstrumentQuery(event.target.value)}
+                          />
                         </div>
                         <button className="primary-button" onClick={() => setSoundView("add")}><Icon name="plus" />添加</button>
                       </div>
@@ -3851,8 +3859,17 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                           </button>
                         </div>
                       ) : (
+                        (() => {
+                          const query = instrumentQuery.trim().toLowerCase();
+                          const match = (name: string) => !query || name.toLowerCase().includes(query);
+                          const systemFiltered = instrumentLibrary.filter((entry) => match(entry.name));
+                          const projectFiltered = projectInstruments.filter((entry) => match(entry.name ?? entry.path.split(/[\\/]/).pop() ?? ""));
+                          if (systemFiltered.length + projectFiltered.length === 0) {
+                            return <div className="settings-empty subscription-empty"><Icon name="music" size={24} /><strong>无匹配音源</strong><p>没有符合「{instrumentQuery}」的音源。</p></div>;
+                          }
+                          return (
                         <div className="subscription-list">
-                          {instrumentLibrary.map((entry) => (
+                          {systemFiltered.map((entry) => (
                             <div key={entry.id} className={entry.enabled ? "subscription-card active" : "subscription-card"}>
                               <div className="subscription-card-main">
                                 <div className="subscription-card-title">
@@ -3871,7 +3888,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                               </div>
                             </div>
                           ))}
-                          {projectInstruments.map((entry) => (
+                          {projectFiltered.map((entry) => (
                             <div key={entry.id} className="subscription-card">
                               <div className="subscription-card-main">
                                 <div className="subscription-card-title">
@@ -3890,6 +3907,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                             </div>
                           ))}
                         </div>
+                          );
+                        })()
                       )}
                       <div className="security-note"><Icon name="music" /><span>音源文件仅记录路径，不随工程复制；项目迁移至其他电脑后，工程音源绑定会失效。</span></div>
                     </>

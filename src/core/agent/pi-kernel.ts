@@ -31,7 +31,6 @@ import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
 import { validateChangeSet } from "../midi/edits.js";
 import { assertAgentToolAllowed } from "./permissions.js";
 import { parseProposedChangeSet } from "./schema.js";
-import { AGENT_CONTEXT_PROMPT } from "./context-prompt.js";
 import { invokeSkill, type ChildRunKernel } from "./skills/invoke.js";
 import { mergeSkillOperations, type SkillOperationSource } from "./skills/merge.js";
 import { hasSkill, listSkillAvailability } from "./skills/registry.js";
@@ -90,6 +89,8 @@ export interface PiKernelRequest {
     /** 当前调用链（用于跨内核环检测）。 */
     visited?: string[];
   };
+  /** 对话注入用上下文提示词（来自 agent/context-prompt.md，由主进程加载传入）。缺失时回退极简兜底。 */
+  contextPrompt?: string;
   /**
    * 离线调试钩子：仅 offline provider 生效，用于脚本化模型回复（测试/复现）。
    */
@@ -338,7 +339,15 @@ function projectForPrompt(project: Readonly<MidiProject>): unknown {
   return rest;
 }
 
-function systemPrompt(mode: AgentMode, skill?: NonNullable<PiKernelRequest["skill"]>): string {
+/** context-prompt.md 缺失时的极简兜底（避免系统提示词为空）。 */
+const CONTEXT_PROMPT_FALLBACK =
+  "你是 M Agent 的内置音乐创作规划内核。永远不能直接改写工程，所有变更必须以结构化候选提交，由用户确认后应用。对用户使用简体中文回答。";
+
+function systemPrompt(
+  mode: AgentMode,
+  skill?: NonNullable<PiKernelRequest["skill"]>,
+  contextPrompt?: string,
+): string {
   const boundary = mode === "research"
     ? "You are in read-only research mode. Never propose, apply, export, or write changes."
     : mode === "plan"
@@ -350,7 +359,7 @@ function systemPrompt(mode: AgentMode, skill?: NonNullable<PiKernelRequest["skil
     "Use the provided tools instead of inventing track or note identifiers.",
     "Keep MIDI pitch and velocity in 0..127, ticks non-negative, and durations positive.",
     "Finish with a concise Chinese analysis for the user.",
-    AGENT_CONTEXT_PROMPT,
+    contextPrompt?.trim() ? contextPrompt : CONTEXT_PROMPT_FALLBACK,
   ];
   if (skill) {
     parts.push(
@@ -677,6 +686,7 @@ function createTools(
           projectInjection: request.projectInjection,
           focusTrackId: request.focusTrackId,
           instruments: request.instruments,
+          contextPrompt: request.contextPrompt,
           signal: request.signal,
         },
         runKernel,
@@ -895,7 +905,7 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
   };
   const agent = new Agent({
     initialState: {
-      systemPrompt: systemPrompt(request.mode, request.skill),
+      systemPrompt: systemPrompt(request.mode, request.skill, request.contextPrompt),
       model: runtime.model as Model<any>,
       thinkingLevel: effectiveThinkingLevel,
       tools: createTools(request, candidates, skillRuntime),

@@ -36,6 +36,8 @@ export interface ChildKernelRequest {
   focusTrackId?: string;
   /** 系统音源库条目（供子 Skill 的 instrument_search 使用）。 */
   instruments?: InstrumentLibrarySummary[];
+  /** 对话注入用上下文提示词（父级透传）。 */
+  contextPrompt?: string;
   /** 发现层：全部 Skill 的 name/description。 */
   skillMetas?: SkillMeta[];
   skill?: {
@@ -83,6 +85,7 @@ export interface InvokeSkillOptions {
     projectInjection?: "all" | "selected";
     focusTrackId?: string;
     instruments?: InstrumentLibrarySummary[];
+    contextPrompt?: string;
     signal?: AbortSignal;
   };
   runKernel: ChildRunKernel;
@@ -170,6 +173,7 @@ export async function invokeSkill(options: InvokeSkillOptions): Promise<SkillInv
     projectInjection: options.parent.projectInjection,
     focusTrackId: options.parent.focusTrackId,
     instruments: options.parent.instruments,
+    contextPrompt: options.parent.contextPrompt,
     skillMetas: options.skillMetas,
     skill: {
       name: targetSkill,

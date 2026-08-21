@@ -1206,6 +1206,9 @@ html, body, #root { color: var(--text); background: var(--bg); }
 .subscription-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
 .subscription-toolbar > div { display: flex; align-items: center; gap: 7px; }
 .subscription-toolbar .quiet-button { border: 1px solid var(--line-strong); }
+.instrument-search-row { flex: 1 1 auto; min-width: 0; }
+.instrument-search-input { min-width: 0; max-width: 260px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-input); color: var(--text); padding: 6px 9px; font-size: 10px; }
+.instrument-search-input:focus { border-color: var(--accent); outline: 0; box-shadow: 0 0 0 2px var(--accent-soft); }
 .instrument-dropzone {
   display: grid;
   justify-items: center;

@@ -72,6 +72,10 @@
       {
         "from": "skills",
         "to": "skills"
+      },
+      {
+        "from": "agent",
+        "to": "agent"
       }
     ],
     "win": {

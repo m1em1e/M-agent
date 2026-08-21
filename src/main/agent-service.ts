@@ -18,6 +18,7 @@ import type { AgentAuthentication } from "./environment-service.js";
 import { recordUsage } from "./usage-store.js";
 import { isTransientAgentError, delayRetry } from "../core/agent/errors.js";
 import { detectCompatibilitySuggestion } from "./probe-compatibility.js";
+import { loadContextPrompt } from "./agent-prompt-loader.js";
 
 /** 判定错误是否为服务端 5xx（用于端点兼容性提示）。 */
 function isFiveHundredError(error: unknown): boolean {
@@ -80,6 +81,7 @@ export async function runAgent(
     // 音源库不可用时，agent 仍可运行（instrument_search 为空）。
   }
   const { objective, skill } = await resolveTopLevelSkill(payload.objective.trim(), skillLoader);
+  const contextPrompt = await loadContextPrompt().catch(() => null);
   const buildRequest = (): Parameters<typeof runPiKernel>[0] => ({
     requestId,
     mode: payload.mode,
@@ -90,6 +92,7 @@ export async function runAgent(
     credentials: authentication?.provider === "openai" || authentication?.provider === "openai-codex"
       ? authentication.credentials
       : undefined,
+    contextPrompt: contextPrompt ?? undefined,
     customProvider: authentication?.provider === "custom" ? authentication.customProvider : undefined,
     modelId: authentication?.provider === "custom"
       ? (authentication.customProvider.activeModelId ?? authentication.customProvider.models[0]?.id)
