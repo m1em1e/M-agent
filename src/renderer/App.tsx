@@ -853,6 +853,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const [instrumentChoiceIndex, setInstrumentChoiceIndex] = useState(0);
   const [instrumentFiltered, setInstrumentFiltered] = useState<Array<{ key: string; label: string; value: string; group: string }>>([]);
   const instrumentMenuRef = useRef<HTMLDivElement>(null);
+  const instrumentSearchRef = useRef<HTMLInputElement>(null);
   const [subscriptionBusy, setSubscriptionBusy] = useState(false);
   const [providersView, setProvidersView] = useState<"list" | "edit">("list");
   const [editingSubscriptionId, setEditingSubscriptionId] = useState<string | null>(null);
@@ -1337,6 +1338,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   useEffect(() => {
     if (!instrumentMenuOpen) return;
+    instrumentSearchRef.current?.focus();
     const closeOnClickOutside = (event: MouseEvent) => {
       if (instrumentMenuRef.current && !instrumentMenuRef.current.contains(event.target as Node)) setInstrumentMenuOpen(false);
     };
@@ -3262,6 +3264,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   <div className="instrument-select-menu" role="listbox" aria-label="选择音色">
                     <div className="instrument-select-search">
                       <input
+                        ref={instrumentSearchRef}
                         type="text"
                         autoComplete="off"
                         placeholder="搜索音色…"
