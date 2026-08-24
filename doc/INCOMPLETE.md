@@ -50,6 +50,30 @@
   或先做 Node PoC。当前定位轻量试听，高级处理由用户导出 MIDI 到专业 DAW。
 - **播放调度**为 rAF 驱动逐音符触发，轻量试听够用；采样级精确需改用 AudioContext 时钟调度（非紧急）。
 
+## SFZ 未完成项（相对 SFZ v1/v2 全量）
+
+- **交叉淡化**：`xfin_lokey`/`xfout_hikey`、`xfin_lovel`/`xfout_hivel`、`xfin_cc`/`xfout_cc`（区域间键/力度/CC 平滑过渡）。
+- **滤波包络**：`fil_env_*`（attack/decay/sustain/release/depth，截止扫频）。
+- **力度曲线（多值）**：`amp_velcurve`（精细力度→音量响应，当前仅 `amp_veltrack` 线性）。
+- **trigger 完整语义**：`trigger=first`/`legato`、`release_time`（当前 `first`/`legato` 按 attack 简化）。
+- **调制补全**：LFO `delay`/`phase`/波形类型；`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`。
+- **keyswitch 补全**：`sw_last`/`sw_previous`。
+- **CC 调制**：`cc_*`、`oncc_*`、`set_cc`（MIDI CC 实时调制音色参数）。
+- **SFZ v2 合成**：`oscillator` 波形发声（非采样）、`playback_rate`。
+- **v2 控制指令**：`on_cc`、`#include` 变体、`hint_*`。
+- **include 变更监听**：主文件解析的 include 文件修改后，音源库扫描缓存（按 mtime）未链式失效，需重建扫描缓存。
+
+## SFZ A–F 功能手动测试清单（尚未手动验证）
+
+> A–F 为已实现的 SFZ 能力，自动化单测已覆盖解析器/选择器；以下为**真实音源试听**层面的手动验证。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。
+
+- **A · 补全与别名**：`tune`/`pitch`（Salamander Retuned 用 `tune=10`，与主版音高对比应一致）；`delay=0.05`（发声延迟）；`pitch_keytrack=0`（不同键音高不变）；`pitch_offset=12`（音高上移一个八度）。
+- **B · 滤波器**：同一采样两份 SFZ `fil_type=lowpass cutoff=300` vs `cutoff=8000`，对比低频版发闷（高频被滤）；`resonance=20` 增强共振峰。
+- **C · 分组行为**：`seq_length=2` + `seq_position=1/2`（两个不同音高采样）连续点击同一键，应交替发声；`random=0` 与 `random=100` 区域多次触发观察随机变体；`trigger=release` 区域在 noteOff 时发声。
+- **D · keyswitch**：`sw_lokey=72 sw_hikey=72` 与 `sw_lokey=60 sw_hikey=60` 两组区域，按 72/60 键后再按普通键，应切换到对应音色层；无激活键时 `sw_default=1` 区域生效。
+- **E · include**：主 SFZ `<include>sub/piano.sfz</include>` + 子文件（含 `default_path` 与采样），扫描后应合并发声；include 循环应被截断（不卡死）。
+- **F · 调制**：`pitch_lfo_freq=6 pitch_lfo_depth=15` 长音符应可听颤音；`pan_lfo_freq=2 pan_lfo_depth=50` 声像左右摆动；`amp_lfo_freq=5 amp_lfo_depth=20` 音量抖动；`pitch_env_depth=100`（上行滑音包络）音头音高变化。
+
 ## 阶段 E：可靠性完善（下一阶段）
 
 1. 目标模式接入真实预算、评分、排序与诊断闭环（对应 P1-1）。
