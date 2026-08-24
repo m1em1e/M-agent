@@ -180,6 +180,36 @@ describe("parseSfzText", () => {
     expect(regions[0]).toMatchObject({ seqLength: 2, seqPosition: 1 });
     expect(regions[1]).toMatchObject({ seqLength: 2, seqPosition: 2, randomChance: 40, trigger: "release" });
   });
+
+  it("解析 keyswitch（sw_lokey/sw_hikey/sw_default）", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav sw_lokey=60 sw_hikey=60
+      <region> sample=b.wav sw_lokey=72 sw_hikey=72 sw_default=1
+    `);
+    expect(regions[0]).toMatchObject({ swLokey: 60, swHikey: 60 });
+    expect(regions[1]).toMatchObject({ swLokey: 72, swHikey: 72, swDefault: 1 });
+  });
+
+  it("解析 include 指令", () => {
+    const parsed = parseSfzText(`
+      <include>sub/piano.sfz</include>
+      <include>drums.sfz</include>
+      <region> sample=a.wav
+    `);
+    expect(parsed.includes).toEqual(["sub/piano.sfz", "drums.sfz"]);
+    expect(parsed.regions).toHaveLength(1);
+  });
+
+  it("解析 LFO 与 pitch 包络 opcode", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav pitch_lfo_freq=5 pitch_lfo_depth=10 pan_lfo_freq=3 pan_lfo_depth=20 amp_lfo_freq=6 amp_lfo_depth=15 pitch_env_depth=50 pitch_env_attack=0.1 pitch_env_decay=0.3 pitch_env_sustain=40
+    `);
+    expect(regions[0]).toMatchObject({
+      pitchLfoFreq: 5, pitchLfoDepth: 10, panLfoFreq: 3, panLfoDepth: 20,
+      ampLfoFreq: 6, ampLfoDepth: 15, pitchEnvDepth: 50, pitchEnvAttack: 0.1,
+      pitchEnvDecay: 0.3, pitchEnvSustain: 40,
+    });
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -220,6 +250,28 @@ describe("pickSfzRegions", () => {
     expect(pickSfzRegions(withRandom, 60, 90, "attack", undefined, () => 0.5).length).toBe(2);
     // random() 恒返回 0.9 → 保留 random>90 的（无）→ 回退。
     expect(pickSfzRegions(withRandom, 60, 90, "attack", undefined, () => 0.95).length).toBe(2);
+  });
+
+  it("keyswitch：激活键选中对应区域、普通区域始终可选", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav key=60 sw_lokey=72 sw_hikey=72
+      <region> sample=b.wav key=60 sw_lokey=60 sw_hikey=60
+      <region> sample=c.wav key=60
+    `);
+    const withKey = pickSfzRegions(regions, 60, 90, "attack", undefined, Math.random, 72);
+    expect(withKey.map((region) => region.samplePath)).toEqual(["a.wav", "c.wav"]);
+    const otherKey = pickSfzRegions(regions, 60, 90, "attack", undefined, Math.random, 60);
+    expect(otherKey.map((region) => region.samplePath)).toEqual(["b.wav", "c.wav"]);
+  });
+
+  it("keyswitch：无激活键时只选 sw_default 区域与普通区域", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav key=60 sw_lokey=72 sw_hikey=72
+      <region> sample=b.wav key=60 sw_lokey=60 sw_hikey=60 sw_default=1
+      <region> sample=c.wav key=60
+    `);
+    const matched = pickSfzRegions(regions, 60, 90, "attack");
+    expect(matched.map((region) => region.samplePath)).toEqual(["b.wav", "c.wav"]);
   });
 });
 

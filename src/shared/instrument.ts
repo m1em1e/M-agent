@@ -107,6 +107,32 @@ export interface SfzRegion {
   randomChance?: number;
   /** 触发条件（默认 attack）。 */
   trigger?: "attack" | "release" | "first" | "legato";
+  /** keyswitch 触发键下界（sw_lokey）。 */
+  swLokey?: number;
+  /** keyswitch 触发键上界（sw_hikey）。 */
+  swHikey?: number;
+  /** 无激活 keyswitch 键时是否默认可选（sw_default=1）。 */
+  swDefault?: number;
+  /** 音高 LFO 频率（Hz）。 */
+  pitchLfoFreq?: number;
+  /** 音高 LFO 深度（cents）。 */
+  pitchLfoDepth?: number;
+  /** 声像 LFO 频率（Hz）。 */
+  panLfoFreq?: number;
+  /** 声像 LFO 深度（0–100）。 */
+  panLfoDepth?: number;
+  /** 音量 LFO 频率（Hz）。 */
+  ampLfoFreq?: number;
+  /** 音量 LFO 深度（0–100）。 */
+  ampLfoDepth?: number;
+  /** 音高包络深度（cents）。 */
+  pitchEnvDepth?: number;
+  /** 音高包络攻击（秒）。 */
+  pitchEnvAttack?: number;
+  /** 音高包络衰减（秒）。 */
+  pitchEnvDecay?: number;
+  /** 音高包络延音电平（0–100）。 */
+  pitchEnvSustain?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

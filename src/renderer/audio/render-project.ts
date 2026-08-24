@@ -322,15 +322,16 @@ function scheduleSfzSource(
   // A：keytrack（键跟随）/ pitchOffset（半音）与 tuning 一同修正音高。
   const keytrack = region.keytrack ?? 100;
   const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0);
-  source.playbackRate.value = 2 ** (semitones / 12);
+  const baseRate = 2 ** (semitones / 12);
+  // A：触发延迟（供所有调度共用）。
+  const startAt = startSec + (region.delay ?? 0);
+  source.playbackRate.setValueAtTime(baseRate, startAt);
   if ((region.loopMode === "continuous" || region.loopMode === "sustain")
     && region.loopStart !== undefined && region.loopEnd !== undefined && region.loopEnd > region.loopStart) {
     source.loop = true;
     source.loopStart = region.loopStart / buffer.sampleRate;
     source.loopEnd = region.loopEnd / buffer.sampleRate;
   }
-  // A：触发延迟。
-  const startAt = startSec + (region.delay ?? 0);
   const gainNode = context.createGain();
   // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
   const vel = Math.max(0, Math.min(1, note.velocity / 127));
@@ -361,6 +362,30 @@ function scheduleSfzSource(
     gainNode.gain.setValueAtTime(sustainGain, releaseStart);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, stopSec);
   }
+  // F：调制 —— pitch LFO 叠加到 playbackRate。
+  if (region.pitchLfoFreq && region.pitchLfoDepth) {
+    const osc = context.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = region.pitchLfoFreq;
+    const depth = context.createGain();
+    depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
+    osc.connect(depth).connect(source.playbackRate);
+    osc.start(startAt);
+  }
+  // F：pitch 包络 —— 对 playbackRate 调度 attack→decay→sustain 电平。
+  if (region.pitchEnvDepth !== undefined && region.pitchEnvDepth !== 0) {
+    const envRate = baseRate * (2 ** (region.pitchEnvDepth / 1200) - 1);
+    const envAttack = region.pitchEnvAttack ?? 0.005;
+    const envDecay = region.pitchEnvDecay ?? 0;
+    const envSustain = region.pitchEnvSustain !== undefined ? Math.max(0, region.pitchEnvSustain) / 100 : 0;
+    const rate = source.playbackRate;
+    rate.cancelScheduledValues(startAt);
+    rate.setValueAtTime(baseRate, startAt);
+    rate.linearRampToValueAtTime(baseRate + envRate, startAt + envAttack);
+    if (envDecay > 0) {
+      rate.linearRampToValueAtTime(baseRate + envRate * envSustain, startAt + envAttack + envDecay);
+    }
+  }
   let chain: AudioNode = source;
   if (region.filterType && region.cutoffHz) {
     const filter = context.createBiquadFilter();
@@ -371,11 +396,29 @@ function scheduleSfzSource(
     chain = filter;
   }
   let output: AudioNode = gainNode;
-  if (region.pan !== 0) {
+  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth)) {
     const panner = context.createStereoPanner();
     panner.pan.value = region.pan / 100;
+    if (region.panLfoFreq && region.panLfoDepth) {
+      const osc = context.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = region.panLfoFreq;
+      const depth = context.createGain();
+      depth.gain.value = region.panLfoDepth / 100;
+      osc.connect(depth).connect(panner.pan);
+      osc.start(startAt);
+    }
     gainNode.connect(panner);
     output = panner;
+  }
+  if (region.ampLfoFreq && region.ampLfoDepth) {
+    const osc = context.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = region.ampLfoFreq;
+    const depth = context.createGain();
+    depth.gain.value = region.ampLfoDepth / 100;
+    osc.connect(depth).connect(gainNode.gain);
+    osc.start(startAt);
   }
   chain.connect(gainNode);
   output.connect(context.destination);

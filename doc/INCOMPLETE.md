@@ -40,8 +40,10 @@
 
 ## 音源系统已知限制
 
-- **SFZ 简化边界**：已支持完整 ADSR 包络（`amp_env_*`/`ampeg_*` 两前缀，含 decay/sustain/hold）、采样 `offset`/`end` 截取、力度曲线 `amp_veltrack`；
-  未实现 keyswitch、随机/交替层、EQ/滤波器与调制 opcode；采样按需懒解码，首次发声个别采样可能延迟。
+- **SFZ 简化边界**：已支持完整 ADSR 包络（`amp_env_*`/`ampeg_*` 两前缀，含 decay/sustain/hold）、采样 `offset`/`end` 截取、力度曲线 `amp_veltrack`、
+  `tune`/`pitch` 别名与 `delay`/`pitch_keytrack`/`pitch_offset`、滤波器（`fil_type`/`cutoff`/`resonance`）、分组行为（`seq_length`/`seq_position` 轮换、`random`、`trigger` attack/release）、
+  keyswitch（`sw_lokey`/`sw_hikey`/`sw_default`）、`<include>` 递归加载、LFO 调制（pitch/pan/amp）与 pitch 包络；
+  未实现 `fil_env`（滤波包络）、`amp_velcurve`（多值力度曲线）、`trigger first`/`legato` 完整语义；采样按需懒解码，首次发声个别采样可能延迟。
 - **CC64 延音踏板未支持**：当前延音为音符级 noteOn/noteOff（SoundFont / SFZ / 振荡器统一释放）；MIDI CC64 延音踏板（sustain pedal）尚未实现，需扩展 MidiNote/工程数据、SMF 导入导出与钢琴卷帘 UI。
 - **VST3 完全未接入**（无扫描/加载/MIDI/音频/参数/State/插件 UI）。调研结论：`nvst3-host` 不适合生产
   （无进程隔离、无音频 I/O、Intel Mac 无预编译、Linux 需 glibc≥2.28）；替代方向为独立原生音频服务（JUCE/Rust），

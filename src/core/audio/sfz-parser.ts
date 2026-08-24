@@ -12,6 +12,8 @@ export interface SfzParseResult {
   defaultPath?: string;
   /** 解析出的区域列表。samplePath 暂为文本中的原始 sample 值，由调用方解析为绝对路径。 */
   regions: SfzRegion[];
+  /** <include> 引用的子文件路径（相对本文件所在目录解析）。 */
+  includes?: string[];
 }
 
 const DEFAULT_KEY_CENTER = 60;
@@ -19,6 +21,7 @@ const DEFAULT_KEY_CENTER = 60;
 export function parseSfzText(text: string): SfzParseResult {
   const regions: SfzRegion[] = [];
   let defaultPath: string | undefined;
+  const includes: string[] = [];
 
   const globals = new Map<string, string>();
   let groups = new Map<string, string>();
@@ -37,6 +40,13 @@ export function parseSfzText(text: string): SfzParseResult {
     if (!trimmed || trimmed.startsWith("//")) continue;
 
     if (trimmed.startsWith("<")) {
+      // <include>path</include>：单独处理（不含 opcode）。
+      const includeMatch = /^<include>\s*(.+?)\s*<\/include>\s*$/i.exec(trimmed);
+      if (includeMatch) {
+        flushRegion();
+        includes.push(includeMatch[1]);
+        continue;
+      }
       flushRegion();
       const closeIndex = trimmed.indexOf(">");
       if (closeIndex < 0) continue;
@@ -76,7 +86,7 @@ export function parseSfzText(text: string): SfzParseResult {
   }
   flushRegion();
 
-  return { defaultPath, regions };
+  return { defaultPath, regions, includes: includes.length > 0 ? includes : undefined };
 }
 
 /** 按音符与力度选择命中的区域（支持力度分层，命中多个时全部返回）。 */
@@ -106,6 +116,7 @@ export function pickSfzRegions(
   trigger: "attack" | "release",
   state?: SfzPickState,
   random: () => number = Math.random,
+  keyswitch?: number,
 ): SfzRegion[] {
   const base = selectSfzRegions(regions, note, velocity);
   if (base.length === 0) return base;
@@ -113,26 +124,35 @@ export function pickSfzRegions(
     trigger === "release" ? region.trigger === "release" : region.trigger !== "release");
   if (matched.length === 0) return trigger === "release" ? matched : base;
 
+  // D：keyswitch 过滤（总是应用）—— 有 sw_* 的区域需落在激活键区间内；无激活键时只选 sw_default。
+  const keyswitched = matched.filter((region) => {
+    if (region.swLokey === undefined && region.swHikey === undefined) return true;
+    if (keyswitch === undefined) return region.swDefault === 1;
+    return keyswitch >= (region.swLokey ?? 0) && keyswitch <= (region.swHikey ?? 127);
+  });
+  if (keyswitched.length === 0) return [];
+  const selection = keyswitched;
+
   // seq 轮换：有 seq_length/seq_position 的区域按触发计数选当前位。
-  const seqRegions = matched.filter((region) => region.seqLength !== undefined && region.seqPosition !== undefined);
+  const seqRegions = selection.filter((region) => region.seqLength !== undefined && region.seqPosition !== undefined);
   if (seqRegions.length > 0) {
     const length = seqRegions[0].seqLength ?? 1;
     const count = state?.seqCounts?.get(note) ?? 0;
     state?.seqCounts?.set(note, count + 1);
     const expected = (count % length) + 1;
-    return matched.filter((region) =>
+    return selection.filter((region) =>
       region.seqPosition === undefined || region.seqPosition === expected);
   }
 
   // random：按权重独立保留，全部滤掉时回退全部。
-  const withRandom = matched.filter((region) => region.randomChance !== undefined);
+  const withRandom = selection.filter((region) => region.randomChance !== undefined);
   if (withRandom.length > 0) {
-    const kept = matched.filter((region) =>
+    const kept = selection.filter((region) =>
       region.randomChance === undefined || random() * 100 < region.randomChance);
-    return kept.length > 0 ? kept : matched;
+    return kept.length > 0 ? kept : selection;
   }
 
-  return matched;
+  return selection;
 }
 
 function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
@@ -240,6 +260,34 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   } else if (trigger !== undefined) {
     region.trigger = "attack";
   }
+
+  // D：keyswitch —— sw_lokey / sw_hikey / sw_default。
+  if (opcodes.has("sw_lokey")) {
+    const swLokey = positiveInt(opcodes.get("sw_lokey") ?? "0");
+    if (swLokey >= 0) region.swLokey = swLokey;
+  }
+  if (opcodes.has("sw_hikey")) {
+    const swHikey = positiveInt(opcodes.get("sw_hikey") ?? "0");
+    if (swHikey >= 0) region.swHikey = swHikey;
+  }
+  if (opcodes.has("sw_default")) {
+    region.swDefault = pickInt(opcodes, "sw_default", 0) === 1 ? 1 : 0;
+  }
+
+  // F：调制 —— LFO（pitch/pan/amp）与 pitch 包络。
+  if (opcodes.has("pitch_lfo_freq")) region.pitchLfoFreq = positiveInt(opcodes.get("pitch_lfo_freq") ?? "0");
+  if (opcodes.has("pitch_lfo_depth")) region.pitchLfoDepth = positiveInt(opcodes.get("pitch_lfo_depth") ?? "0");
+  if (opcodes.has("pan_lfo_freq")) region.panLfoFreq = positiveInt(opcodes.get("pan_lfo_freq") ?? "0");
+  if (opcodes.has("pan_lfo_depth")) region.panLfoDepth = positiveInt(opcodes.get("pan_lfo_depth") ?? "0");
+  if (opcodes.has("amp_lfo_freq")) region.ampLfoFreq = positiveInt(opcodes.get("amp_lfo_freq") ?? "0");
+  if (opcodes.has("amp_lfo_depth")) region.ampLfoDepth = positiveInt(opcodes.get("amp_lfo_depth") ?? "0");
+  if (opcodes.has("pitch_env_depth")) region.pitchEnvDepth = positiveInt(opcodes.get("pitch_env_depth") ?? "0");
+  const pitchEnvAttack = parseSeconds(pickOpcode(opcodes, "pitch_env_attack"));
+  const pitchEnvDecay = parseSeconds(pickOpcode(opcodes, "pitch_env_decay"));
+  const pitchEnvSustain = parsePercent(pickOpcode(opcodes, "pitch_env_sustain"));
+  if (pitchEnvAttack !== undefined) region.pitchEnvAttack = pitchEnvAttack;
+  if (pitchEnvDecay !== undefined) region.pitchEnvDecay = pitchEnvDecay;
+  if (pitchEnvSustain !== undefined) region.pitchEnvSustain = pitchEnvSustain;
 
   return region;
 }
