@@ -133,6 +133,32 @@ export interface SfzRegion {
   pitchEnvDecay?: number;
   /** 音高包络延音电平（0–100）。 */
   pitchEnvSustain?: number;
+  /** 键区交叉淡化：淡入起点（xfin_lokey）。 */
+  xfinLokey?: number;
+  /** 键区交叉淡化：淡入终点（xfin_hikey，通常等于 lokey）。 */
+  xfinHikey?: number;
+  /** 键区交叉淡化：淡出起点（xfout_lokey，通常等于 hikey）。 */
+  xfoutLokey?: number;
+  /** 键区交叉淡化：淡出终点（xfout_hikey）。 */
+  xfoutHikey?: number;
+  /** 力度区交叉淡化：淡入起点（xfin_lovel）。 */
+  xfinLovel?: number;
+  /** 力度区交叉淡化：淡入终点（xfin_hivel）。 */
+  xfinHivel?: number;
+  /** 力度区交叉淡化：淡出起点（xfout_lovel）。 */
+  xfoutLovel?: number;
+  /** 力度区交叉淡化：淡出终点（xfout_hivel）。 */
+  xfoutHivel?: number;
+  /** 滤波包络深度（cents）。 */
+  filEnvDepth?: number;
+  /** 滤波包络攻击（秒）。 */
+  filEnvAttack?: number;
+  /** 滤波包络衰减（秒）。 */
+  filEnvDecay?: number;
+  /** 滤波包络延音电平（0–100）。 */
+  filEnvSustain?: number;
+  /** 力度→音量响应曲线（力度点 → 音量 0–1，amp_velcurve_N）。 */
+  velCurve?: Record<number, number>;
 }
 
 /** Renderer 可见的库条目摘要。 */

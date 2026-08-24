@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseSfzText, pickSfzRegions, selectSfzRegions } from "../../src/core/audio/sfz-parser";
+import {
+  parseSfzText,
+  pickSfzRegions,
+  pickSfzRegionsWithGain,
+  sampleVelCurve,
+  selectSfzRegions,
+} from "../../src/core/audio/sfz-parser";
 
 describe("parseSfzText", () => {
   it("解析基础 region 并给出默认值", () => {
@@ -210,6 +216,23 @@ describe("parseSfzText", () => {
       pitchEnvDecay: 0.3, pitchEnvSustain: 40,
     });
   });
+
+  it("解析交叉淡化（xfin/xfout 键与力度）", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav lokey=40 hikey=60 xfin_lokey=36 xfout_hikey=64 xfin_lovel=10 xfout_hivel=120
+    `);
+    expect(regions[0]).toMatchObject({
+      xfinLokey: 36, xfoutHikey: 64, xfinLovel: 10, xfoutHivel: 120,
+    });
+  });
+
+  it("解析滤波包络（fil_env）与力度曲线（amp_velcurve）", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav fil_env_depth=400 fil_env_attack=0.1 fil_env_decay=0.2 fil_env_sustain=50 amp_velcurve_30=0.2 amp_velcurve_100=0.9
+    `);
+    expect(regions[0]).toMatchObject({ filEnvDepth: 400, filEnvAttack: 0.1, filEnvDecay: 0.2, filEnvSustain: 50 });
+    expect(regions[0].velCurve).toEqual({ 30: 0.2, 100: 0.9 });
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -272,6 +295,49 @@ describe("pickSfzRegions", () => {
     `);
     const matched = pickSfzRegions(regions, 60, 90, "attack");
     expect(matched.map((region) => region.samplePath)).toEqual(["b.wav", "c.wav"]);
+  });
+});
+
+describe("pickSfzRegionsWithGain / crossfade", () => {
+  const { regions } = parseSfzText(`
+    <region> sample=a.wav lokey=40 hikey=60 xfin_lokey=36 xfout_hikey=64
+  `);
+
+  it("主区间内 gain 为 1", () => {
+    const picks = pickSfzRegionsWithGain(regions, 50, 90, "attack");
+    expect(picks).toHaveLength(1);
+    expect(picks[0].gain).toBeCloseTo(1, 5);
+  });
+
+  it("淡入带内按比例（xfin_lokey=36 → lokey=40）", () => {
+    const picks = pickSfzRegionsWithGain(regions, 38, 90, "attack");
+    expect(picks[0].gain).toBeCloseTo(0.5, 5);
+    const atStart = pickSfzRegionsWithGain(regions, 36, 90, "attack");
+    expect(atStart[0].gain).toBeCloseTo(0, 5);
+  });
+
+  it("淡出带内按比例（hikey=60 → xfout_hikey=64）", () => {
+    const picks = pickSfzRegionsWithGain(regions, 62, 90, "attack");
+    expect(picks[0].gain).toBeCloseTo(0.5, 5);
+  });
+
+  it("有效范围外不命中", () => {
+    expect(pickSfzRegionsWithGain(regions, 35, 90, "attack")).toHaveLength(0);
+    expect(pickSfzRegionsWithGain(regions, 65, 90, "attack")).toHaveLength(0);
+  });
+});
+
+describe("sampleVelCurve", () => {
+  const curve = { 30: 0.2, 100: 0.9 };
+
+  it("端点与插值", () => {
+    expect(sampleVelCurve(curve, 10)).toBe(0.2);
+    expect(sampleVelCurve(curve, 100)).toBe(0.9);
+    expect(sampleVelCurve(curve, 65)).toBeCloseTo(0.2 + (0.9 - 0.2) * (35 / 70), 5);
+  });
+
+  it("无曲线返回 undefined", () => {
+    expect(sampleVelCurve(undefined, 60)).toBeUndefined();
   });
 });
 

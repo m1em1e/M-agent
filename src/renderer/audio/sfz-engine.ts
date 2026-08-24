@@ -1,4 +1,4 @@
-import { pickSfzRegions, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 将 SFZ 滤波器类型映射到 Web Audio BiquadFilterType（bandreject → notch）。 */
@@ -45,19 +45,19 @@ export class SfzEngine {
       this.keyswitchActive.set(libraryId, note);
     }
     const keyswitch = this.keyswitchActive.get(libraryId);
-    const matched = pickSfzRegions(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch);
+    const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch);
     if (matched.length === 0) return;
     const now = this.context.currentTime;
     const items: ActiveSource[] = [];
     let releaseSeconds = 0.1;
-    for (const region of matched) {
+    for (const { region, gain } of matched) {
       let buffer: AudioBuffer;
       try {
         buffer = await library.ensureSample(this.context, region.samplePath);
       } catch {
         continue;
       }
-      const item = this.startSustainedSource(region, buffer, note, velocity, now);
+      const item = this.startSustainedSource(region, buffer, note, velocity, now, gain);
       if (item) {
         items.push(item);
         releaseSeconds = Math.max(releaseSeconds, region.release ?? 0.1);
@@ -154,6 +154,7 @@ export class SfzEngine {
     note: number,
     velocity: number,
     now: number,
+    crossfadeGain = 1,
   ): ActiveSource | null {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
@@ -178,15 +179,15 @@ export class SfzEngine {
 
     const gainNode = this.context.createGain();
 
-    // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
+    // 力度 → 音量：优先用 amp_velcurve 曲线插值，否则 amp_veltrack（默认 100=力度完全决定；0=力度不影响）。
     const vel = Math.max(0, Math.min(1, velocity / 127));
-    let velocityFactor = vel;
+    let velocityFactor = sampleVelCurve(region.velCurve, velocity) ?? vel;
     const veltrack = region.ampVelTrack;
     if (veltrack !== undefined && veltrack !== 100) {
       const t = Math.max(0, Math.min(100, veltrack)) / 100;
-      velocityFactor = t * vel + (1 - t);
+      velocityFactor = t * velocityFactor + (1 - t);
     }
-    const peak = Math.pow(10, region.volume / 20) * velocityFactor;
+    const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, crossfadeGain));
 
     // ADSR：attack→decay→sustain 保持（release 由 noteOff 触发）。
     const attack = region.attack ?? 0.005;
@@ -227,13 +228,28 @@ export class SfzEngine {
       }
     }
 
-    // B：滤波器（source → BiquadFilter → gain）。
+    // B：滤波器（source → BiquadFilter → gain）+ 滤波包络（fil_env 对 frequency 调度）。
     let chain: AudioNode = source;
+    let filterEnvelope: { filter: BiquadFilterNode; baseFreq: number } | undefined;
     if (region.filterType && region.cutoffHz) {
       const filter = this.context.createBiquadFilter();
       filter.type = toBiquadType(region.filterType);
       filter.frequency.value = region.cutoffHz;
       if (region.resonanceQ) filter.Q.value = region.resonanceQ;
+      if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
+        const baseFreq = region.cutoffHz;
+        const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
+        const envAttack = region.filEnvAttack ?? 0.005;
+        const envDecay = region.filEnvDecay ?? 0;
+        const envSustain = region.filEnvSustain !== undefined ? Math.max(0, region.filEnvSustain) / 100 : 0;
+        filter.frequency.cancelScheduledValues(startAt);
+        filter.frequency.setValueAtTime(baseFreq, startAt);
+        filter.frequency.exponentialRampToValueAtTime(Math.max(1, peakFreq), startAt + envAttack);
+        if (envDecay > 0) {
+          filter.frequency.exponentialRampToValueAtTime(Math.max(1, baseFreq + (peakFreq - baseFreq) * envSustain), startAt + envAttack + envDecay);
+        }
+        filterEnvelope = { filter, baseFreq };
+      }
       source.connect(filter);
       chain = filter;
     }
@@ -271,10 +287,10 @@ export class SfzEngine {
     output.connect(this.context.destination);
 
     source.start(startAt, offsetSec, playDuration);
-    return { source, gain: gainNode, lfos };
+    return { source, gain: gainNode, lfos, filterEnvelope };
   }
 
-  /** 让一组 source 进入 release（从当前 sustain 电平指数衰减到静音）。 */
+  /** 让一组 source 进入 release（从当前 sustain 电平指数衰减到静音，滤波截止回落到 base）。 */
   private release(entry: ActiveNote): void {
     const now = this.context.currentTime;
     const end = now + Math.max(0.01, entry.releaseSeconds);
@@ -285,6 +301,14 @@ export class SfzEngine {
         item.gain.gain.exponentialRampToValueAtTime(0.0001, end);
       } catch {
         // 忽略调度异常（增益已为 0 等）。
+      }
+      if (item.filterEnvelope) {
+        try {
+          item.filterEnvelope.filter.frequency.cancelScheduledValues(now);
+          item.filterEnvelope.filter.frequency.setValueAtTime(item.filterEnvelope.baseFreq, now);
+        } catch {
+          // 忽略。
+        }
       }
       for (const lfo of item.lfos ?? []) {
         try {
@@ -323,6 +347,8 @@ interface ActiveSource {
   gain: GainNode;
   /** 调制 LFO（stop 时需一并停止）。 */
   lfos?: Array<{ osc: OscillatorNode; gain: GainNode }>;
+  /** 滤波包络（noteOff 时把截止频率回落到 baseFreq）。 */
+  filterEnvelope?: { filter: BiquadFilterNode; baseFreq: number };
 }
 
 interface ActiveNote {

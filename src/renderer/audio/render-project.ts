@@ -2,7 +2,7 @@ import { WorkletSynthesizer, audioBufferToWav } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
-import { selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { MidiNote, MidiProject, MidiTrack } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
@@ -286,14 +286,14 @@ async function renderPlainLayer(
       for (const note of track.notes) {
         const startSec = tickToSeconds(note.startTick, options.ppq, options.tempo);
         const stopSec = startSec + tickToSeconds(note.durationTicks, options.ppq, options.tempo);
-        for (const region of selectSfzRegions(group.regions, note.pitch, note.velocity)) {
+        for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack")) {
           let buffer: AudioBuffer;
           try {
             buffer = await ensureSample(region.samplePath);
           } catch {
             continue;
           }
-          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1);
+          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1, gain);
         }
       }
     }
@@ -316,6 +316,7 @@ function scheduleSfzSource(
   startSec: number,
   stopSec: number,
   volume: number,
+  crossfadeGain = 1,
 ): void {
   const source = context.createBufferSource();
   source.buffer = buffer;
@@ -335,13 +336,13 @@ function scheduleSfzSource(
   const gainNode = context.createGain();
   // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
   const vel = Math.max(0, Math.min(1, note.velocity / 127));
-  let velocityFactor = vel;
+  let velocityFactor = sampleVelCurve(region.velCurve, note.velocity) ?? vel;
   const veltrack = region.ampVelTrack;
   if (veltrack !== undefined && veltrack !== 100) {
     const t = Math.max(0, Math.min(100, veltrack)) / 100;
-    velocityFactor = t * vel + (1 - t);
+    velocityFactor = t * velocityFactor + (1 - t);
   }
-  const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, volume));
+  const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, volume)) * Math.max(0, Math.min(1, crossfadeGain));
   // 完整 ADSR 包络。
   const attack = region.attack ?? 0.005;
   const decay = region.decay ?? 0;
@@ -392,6 +393,20 @@ function scheduleSfzSource(
     filter.type = region.filterType === "bandreject" ? "notch" : region.filterType;
     filter.frequency.value = region.cutoffHz;
     if (region.resonanceQ) filter.Q.value = region.resonanceQ;
+    // 滤波包络：对 frequency 调度 attack→decay→sustain。
+    if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
+      const baseFreq = region.cutoffHz;
+      const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
+      const envAttack = region.filEnvAttack ?? 0.005;
+      const envDecay = region.filEnvDecay ?? 0;
+      const envSustain = region.filEnvSustain !== undefined ? Math.max(0, region.filEnvSustain) / 100 : 0;
+      filter.frequency.cancelScheduledValues(startAt);
+      filter.frequency.setValueAtTime(baseFreq, startAt);
+      filter.frequency.exponentialRampToValueAtTime(Math.max(1, peakFreq), startAt + envAttack);
+      if (envDecay > 0) {
+        filter.frequency.exponentialRampToValueAtTime(Math.max(1, baseFreq + (peakFreq - baseFreq) * envSustain), startAt + envAttack + envDecay);
+      }
+    }
     source.connect(filter);
     chain = filter;
   }

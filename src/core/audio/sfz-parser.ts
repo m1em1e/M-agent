@@ -155,6 +155,95 @@ export function pickSfzRegions(
   return selection;
 }
 
+/** 单个交叉淡化带（键或力度区）的淡化系数：淡入带 inStart(0)→inEnd(1)，淡出带 outStart(1)→outEnd(0)，中间 1。 */
+function crossfadeGain(value: number, inStart: number, inEnd: number, outStart: number, outEnd: number): number {
+  if (inStart !== inEnd && value >= inStart && value <= inEnd) {
+    return Math.max(0, Math.min(1, (value - inStart) / (inEnd - inStart)));
+  }
+  if (outStart !== outEnd && value >= outStart && value <= outEnd) {
+    return Math.max(0, Math.min(1, (outEnd - value) / (outEnd - outStart)));
+  }
+  return 1;
+}
+
+/** 力度曲线插值：按力度从 velCurve 表中线性插值音量系数（无表返回 undefined）。 */
+export function sampleVelCurve(curve: Record<number, number> | undefined, velocity: number): number | undefined {
+  if (!curve) return undefined;
+  const points = Object.keys(curve).map(Number).sort((a, b) => a - b);
+  if (points.length === 0) return undefined;
+  if (velocity <= points[0]) return curve[points[0]];
+  const last = points[points.length - 1];
+  if (velocity >= last) return curve[last];
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+    if (velocity >= p0 && velocity <= p1) {
+      const t = (velocity - p0) / (p1 - p0);
+      return curve[p0] + (curve[p1] - curve[p0]) * t;
+    }
+  }
+  return curve[last];
+}
+
+/**
+ * 带交叉淡化与选择策略的区域选择：返回命中区域及其音量系数。
+ * 键/力度命中扩展到 xfin/xfout 范围；gain = 键淡化 × 力度淡化。
+ * trigger / keyswitch / seq / random 过滤与 pickSfzRegions 一致。
+ */
+export function pickSfzRegionsWithGain(
+  regions: SfzRegion[],
+  note: number,
+  velocity: number,
+  trigger: "attack" | "release",
+  state?: SfzPickState,
+  random: () => number = Math.random,
+  keyswitch?: number,
+): Array<{ region: SfzRegion; gain: number }> {
+  const matched = regions.filter((region) => {
+    // 有效键区：淡入起点到淡出终点；力度区同理。
+    const keyLow = region.xfinLokey ?? region.lokey;
+    const keyHigh = region.xfoutHikey ?? region.hikey;
+    if (note < keyLow || note > keyHigh) return false;
+    const velLow = region.xfinLovel ?? region.lovel;
+    const velHigh = region.xfoutHivel ?? region.hivel;
+    if (velocity < velLow || velocity > velHigh) return false;
+    if (trigger === "release" ? region.trigger !== "release" : region.trigger === "release") return false;
+    // keyswitch 过滤。
+    if (region.swLokey !== undefined || region.swHikey !== undefined) {
+      if (keyswitch === undefined ? region.swDefault !== 1
+        : keyswitch < (region.swLokey ?? 0) || keyswitch > (region.swHikey ?? 127)) return false;
+    }
+    return true;
+  });
+  if (matched.length === 0) return [];
+
+  // seq 轮换：有 seq_length/seq_position 的区域按触发计数选当前位。
+  const seqRegions = matched.filter((region) => region.seqLength !== undefined && region.seqPosition !== undefined);
+  let selection = matched;
+  if (seqRegions.length > 0) {
+    const length = seqRegions[0].seqLength ?? 1;
+    const count = state?.seqCounts?.get(note) ?? 0;
+    state?.seqCounts?.set(note, count + 1);
+    const expected = (count % length) + 1;
+    selection = matched.filter((region) => region.seqPosition === undefined || region.seqPosition === expected);
+    if (selection.length === 0) selection = matched;
+  }
+
+  // random：按权重独立保留，全部滤掉时回退全部。
+  const withRandom = selection.filter((region) => region.randomChance !== undefined);
+  if (withRandom.length > 0) {
+    const kept = selection.filter((region) =>
+      region.randomChance === undefined || random() * 100 < region.randomChance);
+    selection = kept.length > 0 ? kept : selection;
+  }
+
+  return selection.map((region) => ({
+    region,
+    gain: crossfadeGain(note, region.xfinLokey ?? region.lokey, region.xfinHikey ?? region.lokey, region.xfoutLokey ?? region.hikey, region.xfoutHikey ?? region.hikey)
+      * crossfadeGain(velocity, region.xfinLovel ?? region.lovel, region.xfinHivel ?? region.lovel, region.xfoutLovel ?? region.hivel, region.xfoutHivel ?? region.hivel),
+  }));
+}
+
 function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   const sample = opcodes.get("sample");
   if (!sample) return null;
@@ -288,6 +377,52 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   if (pitchEnvAttack !== undefined) region.pitchEnvAttack = pitchEnvAttack;
   if (pitchEnvDecay !== undefined) region.pitchEnvDecay = pitchEnvDecay;
   if (pitchEnvSustain !== undefined) region.pitchEnvSustain = pitchEnvSustain;
+
+  // 交叉淡化（键/力度）：xfin_*/xfout_*。
+  const pair = (key: string): number | undefined => {
+    const value = opcodes.get(key);
+    if (value === undefined) return undefined;
+    const parsed = positiveInt(value);
+    return parsed >= 0 ? parsed : undefined;
+  };
+  const xfinLokey = pair("xfin_lokey");
+  const xfinHikey = pair("xfin_hikey");
+  const xfoutLokey = pair("xfout_lokey");
+  const xfoutHikey = pair("xfout_hikey");
+  const xfinLovel = pair("xfin_lovel");
+  const xfinHivel = pair("xfin_hivel");
+  const xfoutLovel = pair("xfout_lovel");
+  const xfoutHivel = pair("xfout_hivel");
+  if (xfinLokey !== undefined) region.xfinLokey = xfinLokey;
+  if (xfinHikey !== undefined) region.xfinHikey = xfinHikey;
+  if (xfoutLokey !== undefined) region.xfoutLokey = xfoutLokey;
+  if (xfoutHikey !== undefined) region.xfoutHikey = xfoutHikey;
+  if (xfinLovel !== undefined) region.xfinLovel = xfinLovel;
+  if (xfinHivel !== undefined) region.xfinHivel = xfinHivel;
+  if (xfoutLovel !== undefined) region.xfoutLovel = xfoutLovel;
+  if (xfoutHivel !== undefined) region.xfoutHivel = xfoutHivel;
+
+  // 滤波包络：fil_env_depth/attack/decay/sustain。
+  if (opcodes.has("fil_env_depth")) region.filEnvDepth = positiveInt(opcodes.get("fil_env_depth") ?? "0");
+  const filEnvAttack = parseSeconds(pickOpcode(opcodes, "fil_env_attack"));
+  const filEnvDecay = parseSeconds(pickOpcode(opcodes, "fil_env_decay"));
+  const filEnvSustain = parsePercent(pickOpcode(opcodes, "fil_env_sustain"));
+  if (filEnvAttack !== undefined) region.filEnvAttack = filEnvAttack;
+  if (filEnvDecay !== undefined) region.filEnvDecay = filEnvDecay;
+  if (filEnvSustain !== undefined) region.filEnvSustain = filEnvSustain;
+
+  // 力度曲线：amp_velcurve_N（力度点 → 音量 0–1）。
+  const curve: Record<number, number> = {};
+  for (const [key, value] of opcodes) {
+    const match = /^amp_velcurve_(\d+)$/i.exec(key);
+    if (!match) continue;
+    const point = Number(match[1]);
+    if (!Number.isInteger(point) || point < 0 || point > 127) continue;
+    const level = Number(value);
+    if (Number.isFinite(level)) curve[point] = Math.max(0, Math.min(1, level));
+  }
+  const curveKeys = Object.keys(curve);
+  if (curveKeys.length > 0) region.velCurve = curve;
 
   return region;
 }

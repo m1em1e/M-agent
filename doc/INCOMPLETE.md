@@ -52,9 +52,9 @@
 
 ## SFZ 未完成项（相对 SFZ v1/v2 全量）
 
-- **交叉淡化**：`xfin_lokey`/`xfout_hikey`、`xfin_lovel`/`xfout_hivel`、`xfin_cc`/`xfout_cc`（区域间键/力度/CC 平滑过渡）。
-- **滤波包络**：`fil_env_*`（attack/decay/sustain/release/depth，截止扫频）。
-- **力度曲线（多值）**：`amp_velcurve`（精细力度→音量响应，当前仅 `amp_veltrack` 线性）。
+- **交叉淡化（键/力度）**：`xfin_lokey/hikey`、`xfout_lokey/hikey`、`xfin_lovel/hivel`、`xfout_lovel/hivel`（区域间键/力度过渡）；`xfin_ccN`/`xfout_ccN`（CC 淡化）未实现——需与 CC 状态统一做。
+- **滤波包络**：`fil_env_depth/attack/decay/sustain`（截止扫频）。
+- **力度曲线（多值）**：`amp_velcurve_N`（力度→音量曲线；与 `amp_veltrack` 并存，曲线优先）。
 - **trigger 完整语义**：`trigger=first`/`legato`、`release_time`（当前 `first`/`legato` 按 attack 简化）。
 - **调制补全**：LFO `delay`/`phase`/波形类型；`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`。
 - **keyswitch 补全**：`sw_last`/`sw_previous`。
@@ -65,7 +65,7 @@
 
 ## SFZ A–F 功能手动测试清单（尚未手动验证）
 
-> A–F 为已实现的 SFZ 能力，自动化单测已覆盖解析器/选择器；以下为**真实音源试听**层面的手动验证。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。
+> A–F 为已实现的 SFZ 能力，自动化单测已覆盖解析器/选择器；以下为**真实音源试听**层面的手动验证。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。另需补充已实现新功能的验证：交叉淡化（`xfin_lokey=36 xfout_hikey=64` 边界试听音量渐变）、滤波包络（`fil_env_depth` 音头滤波扫频）、力度曲线（`amp_velcurve_N` 各力度点音量差异）。
 
 - **A · 补全与别名**：`tune`/`pitch`（Salamander Retuned 用 `tune=10`，与主版音高对比应一致）；`delay=0.05`（发声延迟）；`pitch_keytrack=0`（不同键音高不变）；`pitch_offset=12`（音高上移一个八度）。
 - **B · 滤波器**：同一采样两份 SFZ `fil_type=lowpass cutoff=300` vs `cutoff=8000`，对比低频版发闷（高频被滤）；`resonance=20` 增强共振峰。
