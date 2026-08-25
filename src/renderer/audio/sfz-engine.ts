@@ -1,9 +1,25 @@
-import { pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { nextKeyswitchState, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 将 SFZ 滤波器类型映射到 Web Audio BiquadFilterType（bandreject → notch）。 */
 function toBiquadType(type: SfzRegion["filterType"]): BiquadFilterType {
   return type === "bandreject" ? "notch" : (type ?? "lowpass");
+}
+
+/** 配置 LFO 振荡器：非 sine 用 type；sine 且指定 phase 用 PeriodicWave 从该相位起振。 */
+function configureLfo(context: AudioContext, osc: OscillatorNode, shape: OscillatorType | undefined, phaseDeg: number | undefined): void {
+  if (shape && shape !== "sine") {
+    osc.type = shape;
+    return;
+  }
+  if (phaseDeg === undefined) {
+    osc.type = "sine";
+    return;
+  }
+  const rad = (phaseDeg * Math.PI) / 180;
+  const real = new Float32Array([0, Math.sin(rad)]);
+  const imag = new Float32Array([0, Math.cos(rad)]);
+  osc.setPeriodicWave(context.createPeriodicWave(real, imag));
 }
 
 /**
@@ -19,8 +35,8 @@ export class SfzEngine {
   private readonly active = new Map<string, ActiveNote[]>();
   /** 分组轮换触发计数（按 note，供 seq_length/seq_position 选择）。 */
   private readonly seqCounts = new Map<number, number>();
-  /** keyswitch 当前激活键（按 libraryId）。 */
-  private readonly keyswitchActive = new Map<string, number>();
+  /** keyswitch 状态机（按 libraryId）。 */
+  private readonly keyswitchStates = new Map<string, { activeKey?: number; previousKey?: number; last?: boolean }>();
 
   constructor(private readonly context: AudioContext) {}
 
@@ -38,13 +54,10 @@ export class SfzEngine {
   async noteOn(channel: number, note: number, velocity: number, libraryId: string): Promise<void> {
     const library = this.libraries.get(libraryId);
     if (!library) return;
-    // D：keyswitch —— 若该 note 落在某区域 sw 区间，则更新该库的激活键。
-    if (library.regions.some((region) =>
-      region.swLokey !== undefined && region.swHikey !== undefined
-      && note >= region.swLokey && note <= region.swHikey)) {
-      this.keyswitchActive.set(libraryId, note);
-    }
-    const keyswitch = this.keyswitchActive.get(libraryId);
+    // D：keyswitch —— 若该 note 命中某区域 sw 区间，则更新该库的 keyswitch 状态机。
+    const ksState = nextKeyswitchState(this.keyswitchStates.get(libraryId), note, library.regions);
+    if (ksState) this.keyswitchStates.set(libraryId, ksState);
+    const keyswitch = this.keyswitchStates.get(libraryId)?.activeKey;
     // trigger 补全：同 channel 已有活动音符 → legato。
     const legato = this.hasActiveNoteOnChannel(channel);
     const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch, legato);
@@ -80,6 +93,12 @@ export class SfzEngine {
       const entry = list.pop()!;
       if (list.length === 0) this.active.delete(key);
       this.release(entry);
+    }
+    // keyswitch：若释放的是某库当前激活键且该库 sw_last=0 → 回退默认。
+    for (const [libraryId, state] of this.keyswitchStates) {
+      if (state.activeKey === note && state.last === false) {
+        this.keyswitchStates.set(libraryId, { ...state, activeKey: undefined });
+      }
     }
     this.playReleaseTrigger(note);
   }
@@ -150,7 +169,7 @@ export class SfzEngine {
     }
     this.active.clear();
     this.seqCounts.clear();
-    this.keyswitchActive.clear();
+    this.keyswitchStates.clear();
   }
 
   dispose(): void {
@@ -218,7 +237,7 @@ export class SfzEngine {
     let lfos: Array<{ osc: OscillatorNode; gain: GainNode }> = [];
     if (region.pitchLfoFreq && region.pitchLfoDepth) {
       const osc = this.context.createOscillator();
-      osc.type = "sine";
+      configureLfo(this.context, osc, region.pitchLfoShape, region.pitchLfoPhase);
       osc.frequency.value = region.pitchLfoFreq;
       const depth = this.context.createGain();
       depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
@@ -277,7 +296,7 @@ export class SfzEngine {
       // F：pan LFO 叠加到 panner.pan。
       if (region.panLfoFreq && region.panLfoDepth) {
         const osc = this.context.createOscillator();
-        osc.type = "sine";
+        configureLfo(this.context, osc, region.panLfoShape, region.panLfoPhase);
         osc.frequency.value = region.panLfoFreq;
         const depth = this.context.createGain();
         depth.gain.value = region.panLfoDepth / 100;
@@ -291,7 +310,7 @@ export class SfzEngine {
     // F：amp LFO 叠加到 gainNode.gain。
     if (region.ampLfoFreq && region.ampLfoDepth) {
       const osc = this.context.createOscillator();
-      osc.type = "sine";
+      configureLfo(this.context, osc, region.ampLfoShape, region.ampLfoPhase);
       osc.frequency.value = region.ampLfoFreq;
       const depth = this.context.createGain();
       depth.gain.value = region.ampLfoDepth / 100;

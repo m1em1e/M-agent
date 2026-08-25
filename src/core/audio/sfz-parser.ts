@@ -193,6 +193,38 @@ function matchTrigger(regionTrigger: SfzRegion["trigger"], trigger: "attack" | "
   return !legato;
 }
 
+/** keyswitch 状态：当前激活键、上一个键、是否切换后保持。 */
+export interface KeyswitchState {
+  activeKey?: number;
+  previousKey?: number;
+  last?: boolean;
+}
+
+/**
+ * 计算 keyswitch 状态机下一步：
+ * - 该 note 命中 keyswitch 区域 → 更新激活键；sw_previous=1 且存在上一个键时回退到上一个键。
+ * - 非 keyswitch 键 → 状态不变。
+ * - last 由命中区域是否 sw_last!=0 决定（默认保持）。
+ */
+export function nextKeyswitchState(
+  state: KeyswitchState | undefined,
+  note: number,
+  regions: ReadonlyArray<SfzRegion>,
+): KeyswitchState | undefined {
+  const ks = regions.filter((region) =>
+    region.swLokey !== undefined && region.swHikey !== undefined
+    && note >= (region.swLokey ?? 0) && note <= (region.swHikey ?? 127));
+  if (ks.length === 0) return state;
+  const prev = state?.activeKey;
+  const wantPrevious = ks.some((region) => region.swPrevious === 1);
+  const usePrevious = wantPrevious && state?.previousKey !== undefined;
+  return {
+    activeKey: usePrevious ? state!.previousKey! : note,
+    previousKey: prev !== undefined ? prev : state?.previousKey,
+    last: ks.some((region) => region.swLast !== 0),
+  };
+}
+
 /**
  * 带交叉淡化与选择策略的区域选择：返回命中区域及其音量系数。
  * 键/力度命中扩展到 xfin/xfout 范围；gain = 键淡化 × 力度淡化。
@@ -443,6 +475,36 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   if (opcodes.has("pitch_lfo_delay")) region.pitchLfoDelay = parseSeconds(opcodes.get("pitch_lfo_delay"));
   if (opcodes.has("pan_lfo_delay")) region.panLfoDelay = parseSeconds(opcodes.get("pan_lfo_delay"));
   if (opcodes.has("amp_lfo_delay")) region.ampLfoDelay = parseSeconds(opcodes.get("amp_lfo_delay"));
+
+  // LFO 补全：波形与起始相位。
+  const lfoShape = (prefix: string): OscillatorType | undefined => {
+    const value = pickOpcode(opcodes, `${prefix}_lfo_shape`);
+    if (!value) return undefined;
+    const shape = value.toLowerCase();
+    if (shape === "triangle" || shape === "square" || shape === "sawtooth") return shape;
+    return "sine";
+  };
+  const pitchLfoShape = lfoShape("pitch");
+  const panLfoShape = lfoShape("pan");
+  const ampLfoShape = lfoShape("amp");
+  if (pitchLfoShape !== undefined) region.pitchLfoShape = pitchLfoShape;
+  if (panLfoShape !== undefined) region.panLfoShape = panLfoShape;
+  if (ampLfoShape !== undefined) region.ampLfoShape = ampLfoShape;
+  const phase = (key: string): number | undefined => {
+    if (!opcodes.has(key)) return undefined;
+    const parsed = Number(opcodes.get(key));
+    return Number.isFinite(parsed) ? ((parsed % 360) + 360) % 360 : undefined;
+  };
+  const pitchLfoPhase = phase("pitch_lfo_phase");
+  const panLfoPhase = phase("pan_lfo_phase");
+  const ampLfoPhase = phase("amp_lfo_phase");
+  if (pitchLfoPhase !== undefined) region.pitchLfoPhase = pitchLfoPhase;
+  if (panLfoPhase !== undefined) region.panLfoPhase = panLfoPhase;
+  if (ampLfoPhase !== undefined) region.ampLfoPhase = ampLfoPhase;
+
+  // keyswitch 补全：sw_last / sw_previous。
+  if (opcodes.has("sw_last")) region.swLast = positiveInt(opcodes.get("sw_last") ?? "0");
+  if (opcodes.has("sw_previous")) region.swPrevious = positiveInt(opcodes.get("sw_previous") ?? "0");
 
   return region;
 }

@@ -56,8 +56,8 @@
 - **滤波包络**：`fil_env_depth/attack/decay/sustain`（截止扫频）。
 - **力度曲线（多值）**：`amp_velcurve_N`（力度→音量曲线；与 `amp_veltrack` 并存，曲线优先）。
 - **trigger 完整语义**：`trigger=first`/`legato`（按同 channel 活动音符判断连奏）、`release_time`（release 采样延迟）；`release_time` 已支持。
-- **调制补全**：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay` 已支持；LFO `phase`（Web Audio OscillatorNode 无起始相位）与 LFO 波形类型未实现。
-- **keyswitch 补全**：`sw_last`/`sw_previous`。
+- **调制补全**：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay` 已支持；LFO `*_lfo_shape`（sine/triangle/square/sawtooth）与 `*_lfo_phase`（sine 用 PeriodicWave 起振）已支持。
+- **keyswitch 补全**：`sw_last`/`sw_previous` 已支持（切换后保持 / 回退上一键）。
 - **CC 调制**：`cc_*`、`oncc_*`、`set_cc`（MIDI CC 实时调制音色参数）。
 - **SFZ v2 合成**：`oscillator` 波形发声（非采样）、`playback_rate`。
 - **v2 控制指令**：`on_cc`、`#include` 变体、`hint_*`。

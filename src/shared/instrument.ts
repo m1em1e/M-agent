@@ -173,6 +173,22 @@ export interface SfzRegion {
   panLfoDelay?: number;
   /** 音量 LFO 延迟（秒）。 */
   ampLfoDelay?: number;
+  /** 音高 LFO 波形（sine/triangle/square/sawtooth）。 */
+  pitchLfoShape?: OscillatorType;
+  /** 声像 LFO 波形。 */
+  panLfoShape?: OscillatorType;
+  /** 音量 LFO 波形。 */
+  ampLfoShape?: OscillatorType;
+  /** 音高 LFO 起始相位（度）。 */
+  pitchLfoPhase?: number;
+  /** 声像 LFO 起始相位（度）。 */
+  panLfoPhase?: number;
+  /** 音量 LFO 起始相位（度）。 */
+  ampLfoPhase?: number;
+  /** keyswitch 切换后保持（sw_last；0=松开 keyswitch 键后回默认）。 */
+  swLast?: number;
+  /** keyswitch 按此键时回退到上一个激活键（sw_previous）。 */
+  swPrevious?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

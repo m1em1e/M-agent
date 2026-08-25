@@ -368,7 +368,7 @@ function scheduleSfzSource(
   // F：调制 —— pitch LFO 叠加到 playbackRate。
   if (region.pitchLfoFreq && region.pitchLfoDepth) {
     const osc = context.createOscillator();
-    osc.type = "sine";
+    configureLfo(context, osc, region.pitchLfoShape, region.pitchLfoPhase);
     osc.frequency.value = region.pitchLfoFreq;
     const depth = context.createGain();
     depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
@@ -420,7 +420,7 @@ function scheduleSfzSource(
     panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset;
     if (region.panLfoFreq && region.panLfoDepth) {
       const osc = context.createOscillator();
-      osc.type = "sine";
+      configureLfo(context, osc, region.panLfoShape, region.panLfoPhase);
       osc.frequency.value = region.panLfoFreq;
       const depth = context.createGain();
       depth.gain.value = region.panLfoDepth / 100;
@@ -432,7 +432,7 @@ function scheduleSfzSource(
   }
   if (region.ampLfoFreq && region.ampLfoDepth) {
     const osc = context.createOscillator();
-    osc.type = "sine";
+    configureLfo(context, osc, region.ampLfoShape, region.ampLfoPhase);
     osc.frequency.value = region.ampLfoFreq;
     const depth = context.createGain();
     depth.gain.value = region.ampLfoDepth / 100;
@@ -447,6 +447,22 @@ function scheduleSfzSource(
   const playDuration = Math.max(0.001, endSec - offsetSec);
   source.start(startAt, offsetSec, playDuration);
   source.stop(Math.min(stopSec + 0.05, startAt + playDuration + 0.05));
+}
+
+/** 离线 LFO 配置：非 sine 用 type；sine 指定 phase 用 PeriodicWave 起振。 */
+function configureLfo(context: OfflineAudioContext, osc: OscillatorNode, shape: OscillatorType | undefined, phaseDeg: number | undefined): void {
+  if (shape && shape !== "sine") {
+    osc.type = shape;
+    return;
+  }
+  if (phaseDeg === undefined) {
+    osc.type = "sine";
+    return;
+  }
+  const rad = (phaseDeg * Math.PI) / 180;
+  const real = new Float32Array([0, Math.sin(rad)]);
+  const imag = new Float32Array([0, Math.cos(rad)]);
+  osc.setPeriodicWave(context.createPeriodicWave(real, imag));
 }
 
 function scheduleOscillator(

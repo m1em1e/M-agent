@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  nextKeyswitchState,
   parseSfzText,
   pickSfzRegions,
   pickSfzRegionsWithGain,
@@ -243,6 +244,17 @@ describe("parseSfzText", () => {
       pitchLfoDelay: 0.1, panLfoDelay: 0.2, ampLfoDelay: 0.3,
     });
   });
+
+  it("解析 keyswitch sw_last/sw_previous 与 LFO 波形/相位", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav sw_lokey=60 sw_hikey=60 sw_last=0 sw_previous=1 pitch_lfo_shape=triangle pitch_lfo_phase=180 pan_lfo_shape=square amp_lfo_shape=sawtooth amp_lfo_phase=90
+    `);
+    expect(regions[0]).toMatchObject({
+      swLast: 0, swPrevious: 1,
+      pitchLfoShape: "triangle", pitchLfoPhase: 180,
+      panLfoShape: "square", ampLfoShape: "sawtooth", ampLfoPhase: 90,
+    });
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -382,5 +394,40 @@ describe("selectSfzRegions", () => {
 
   it("键区外返回空", () => {
     expect(selectSfzRegions(regions, 80, 64)).toHaveLength(0);
+  });
+});
+
+describe("nextKeyswitchState", () => {
+  const ksRegions = parseSfzText(`
+    <region> sample=a.wav key=60 sw_lokey=60 sw_hikey=60
+    <region> sample=b.wav key=60 sw_lokey=72 sw_hikey=72
+    <region> sample=c.wav key=60 sw_lokey=84 sw_hikey=84 sw_previous=1
+    <region> sample=d.wav key=60 sw_lokey=96 sw_hikey=96 sw_last=0
+  `).regions;
+
+  it("非 keyswitch 键不改变状态", () => {
+    expect(nextKeyswitchState(undefined, 40, ksRegions)).toBeUndefined();
+    const state = { activeKey: 60, previousKey: undefined, last: true };
+    expect(nextKeyswitchState(state, 40, ksRegions)).toBe(state);
+  });
+
+  it("首次 keyswitch 键激活并记录（默认保持）", () => {
+    const next = nextKeyswitchState(undefined, 60, ksRegions);
+    expect(next).toMatchObject({ activeKey: 60, last: true });
+  });
+
+  it("新 keyswitch 键更新激活，旧键记为上一个", () => {
+    const next = nextKeyswitchState({ activeKey: 60, last: true }, 72, ksRegions);
+    expect(next).toMatchObject({ activeKey: 72, previousKey: 60, last: true });
+  });
+
+  it("sw_previous=1 回退到上一个激活键", () => {
+    const next = nextKeyswitchState({ activeKey: 72, previousKey: 60, last: true }, 84, ksRegions);
+    expect(next).toMatchObject({ activeKey: 60, previousKey: 72, last: true });
+  });
+
+  it("sw_last=0 区域标记 last=false（松开 keyswitch 键后回默认）", () => {
+    const next = nextKeyswitchState({ activeKey: 60, last: true }, 96, ksRegions);
+    expect(next).toMatchObject({ activeKey: 96, last: false });
   });
 });
