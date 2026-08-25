@@ -1,4 +1,4 @@
-import { ccCenterOffset, nextKeyswitchState, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, nextKeyswitchState, oscillatorFrequency, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 将 SFZ 滤波器类型映射到 Web Audio BiquadFilterType（bandreject → notch）。 */
@@ -224,8 +224,6 @@ export class SfzEngine {
     crossfadeGain = 1,
     getCC?: (controller: number) => number,
   ): ActiveSource | null {
-    const source = this.context.createBufferSource();
-    source.buffer = buffer;
     // A：触发延迟（供所有调度共用）。
     const startAt = now + (region.delay ?? 0);
     // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
@@ -237,18 +235,33 @@ export class SfzEngine {
     const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
       + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
     const baseRate = 2 ** (semitones / 12);
-    source.playbackRate.setValueAtTime(baseRate, startAt);
-    if ((region.loopMode === "continuous" || region.loopMode === "sustain")
-      && region.loopStart !== undefined && region.loopEnd !== undefined && region.loopEnd > region.loopStart) {
-      source.loop = true;
-      source.loopStart = region.loopStart / buffer.sampleRate;
-      source.loopEnd = region.loopEnd / buffer.sampleRate;
-    }
+    const playbackRate = region.playbackRate ?? 1;
 
-    // 采样 offset/end 截取（sample 帧 → 秒）。
-    const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
-    const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
-    const playDuration = Math.max(0.001, endSec - offsetSec);
+    let source: AudioScheduledSourceNode;
+    let offsetSec = 0;
+    let playDuration = 0;
+    if (region.oscillator) {
+      // v2 合成：振荡器发声（非采样），keytrack 视为 100 跟随 note，频率叠加调制半音与 playback_rate。
+      const osc = this.context.createOscillator();
+      osc.type = region.oscillator;
+      const modSemitones = semitones - (note - region.keyCenter);
+      osc.frequency.value = oscillatorFrequency(note, modSemitones) * playbackRate;
+      source = osc;
+    } else {
+      const bufferSource = this.context.createBufferSource();
+      bufferSource.buffer = buffer;
+      bufferSource.playbackRate.setValueAtTime(baseRate * playbackRate, startAt);
+      if ((region.loopMode === "continuous" || region.loopMode === "sustain")
+        && region.loopStart !== undefined && region.loopEnd !== undefined && region.loopEnd > region.loopStart) {
+        bufferSource.loop = true;
+        bufferSource.loopStart = region.loopStart / buffer.sampleRate;
+        bufferSource.loopEnd = region.loopEnd / buffer.sampleRate;
+      }
+      offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
+      const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
+      playDuration = Math.max(0.001, endSec - offsetSec);
+      source = bufferSource;
+    }
 
     const gainNode = this.context.createGain();
 
@@ -281,30 +294,35 @@ export class SfzEngine {
       gainNode.gain.exponentialRampToValueAtTime(sustainGain, startAt + attack + decay);
     }
 
-    // F：调制 —— pitch LFO（颤音）叠加到 playbackRate。
+    // F：调制 —— pitch LFO（颤音）叠加到 pitch 参数。
+    const pitchParam = region.oscillator
+      ? (source as OscillatorNode).frequency
+      : (source as AudioBufferSourceNode).playbackRate;
+    const pitchBase = region.oscillator
+      ? (source as OscillatorNode).frequency.value
+      : baseRate * playbackRate;
     let lfos: Array<{ osc: OscillatorNode; gain: GainNode }> = [];
     if (region.pitchLfoFreq && region.pitchLfoDepth) {
       const osc = this.context.createOscillator();
       configureLfo(this.context, osc, region.pitchLfoShape, region.pitchLfoPhase);
       osc.frequency.value = region.pitchLfoFreq;
       const depth = this.context.createGain();
-      depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
-      osc.connect(depth).connect(source.playbackRate);
+      depth.gain.value = pitchBase * (2 ** (region.pitchLfoDepth / 1200) - 1);
+      osc.connect(depth).connect(pitchParam);
       osc.start(startAt + (region.pitchLfoDelay ?? 0));
       lfos.push({ osc, gain: depth });
     }
-    // F：pitch 包络 —— 对 playbackRate 调度 attack→decay→sustain 电平。
+    // F：pitch 包络 —— 对 pitch 参数调度 attack→decay→sustain 电平。
     if (region.pitchEnvDepth !== undefined && region.pitchEnvDepth !== 0) {
-      const envRate = baseRate * (2 ** (region.pitchEnvDepth / 1200) - 1);
+      const envRate = pitchBase * (2 ** (region.pitchEnvDepth / 1200) - 1);
       const envAttack = region.pitchEnvAttack ?? 0.005;
       const envDecay = region.pitchEnvDecay ?? 0;
       const envSustain = region.pitchEnvSustain !== undefined ? Math.max(0, region.pitchEnvSustain) / 100 : 0;
-      const rate = source.playbackRate;
-      rate.cancelScheduledValues(startAt);
-      rate.setValueAtTime(baseRate, startAt);
-      rate.linearRampToValueAtTime(baseRate + envRate, startAt + envAttack);
+      pitchParam.cancelScheduledValues(startAt);
+      pitchParam.setValueAtTime(pitchBase, startAt);
+      pitchParam.linearRampToValueAtTime(pitchBase + envRate, startAt + envAttack);
       if (envDecay > 0) {
-        rate.linearRampToValueAtTime(baseRate + envRate * envSustain, startAt + envAttack + envDecay);
+        pitchParam.linearRampToValueAtTime(pitchBase + envRate * envSustain, startAt + envAttack + envDecay);
       }
     }
 
@@ -371,7 +389,11 @@ export class SfzEngine {
     chain.connect(gainNode);
     output.connect(this.context.destination);
 
-    source.start(startAt, offsetSec, playDuration);
+    if (region.oscillator) {
+      source.start(startAt);
+    } else {
+      (source as AudioBufferSourceNode).start(startAt, offsetSec, playDuration);
+    }
     return { source, gain: gainNode, lfos, filterEnvelope };
   }
 
@@ -428,7 +450,7 @@ function stopItem(item: ActiveSource): void {
 }
 
 interface ActiveSource {
-  source: AudioBufferSourceNode;
+  source: AudioScheduledSourceNode;
   gain: GainNode;
   /** 调制 LFO（stop 时需一并停止）。 */
   lfos?: Array<{ osc: OscillatorNode; gain: GainNode }>;

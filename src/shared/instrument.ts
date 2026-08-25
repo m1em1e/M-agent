@@ -217,6 +217,10 @@ export interface SfzRegion {
   ccPanN?: number;
   /** CC→声像调制深度（-100..100）。 */
   ccPanDepth?: number;
+  /** v2 合成振荡器波形（有值则非采样发声，优先于 sample）。 */
+  oscillator?: OscillatorType;
+  /** 采样播放速率 / 振荡器频率倍率（playback_rate）。 */
+  playbackRate?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

@@ -173,6 +173,11 @@ export function ccCenterOffset(depth: number, ccValue: number): number {
   return depth * ((ccValue - 64) / 63);
 }
 
+/** v2 合成振荡器频率：note 音高基准（A4=69）叠加调制半音。 */
+export function oscillatorFrequency(note: number, modSemitones: number): number {
+  return 440 * 2 ** ((note - 69 + modSemitones) / 12);
+}
+
 /** 力度曲线插值：按力度从 velCurve 表中线性插值音量系数（无表返回 undefined）。 */
 export function sampleVelCurve(curve: Record<number, number> | undefined, velocity: number): number | undefined {
   if (!curve) return undefined;
@@ -309,12 +314,13 @@ export function pickSfzRegionsWithGain(
 
 function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   const sample = opcodes.get("sample");
-  if (!sample) return null;
+  const isOscillator = opcodes.has("oscillator");
+  if (!sample && !isOscillator) return null;
 
   const keyCenter = pickInt(opcodes, "key", "pitch_keycenter", DEFAULT_KEY_CENTER);
 
   const region: SfzRegion = {
-    samplePath: sample,
+    samplePath: sample ?? "",
     lokey: pickInt(opcodes, "lokey", 0),
     hikey: pickInt(opcodes, "hikey", 127),
     lovel: pickInt(opcodes, "lovel", 0),
@@ -554,6 +560,18 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
     else if (match[2] === "pitch") { region.ccPitchN = cc; region.ccPitchDepth = depth; }
     else if (match[2] === "cutoff") { region.ccCutoffN = cc; region.ccCutoffDepth = depth; }
     else { region.ccPanN = cc; region.ccPanDepth = depth; }
+  }
+
+  // v2 合成：oscillator 波形 与 playback_rate。
+  const oscillator = opcodes.get("oscillator");
+  if (oscillator !== undefined) {
+    const shape = oscillator.toLowerCase();
+    if (shape === "saw") region.oscillator = "sawtooth";
+    else if (shape === "square" || shape === "triangle" || shape === "sine") region.oscillator = shape;
+  }
+  if (opcodes.has("playback_rate")) {
+    const rate = Number(opcodes.get("playback_rate"));
+    if (Number.isFinite(rate) && rate > 0) region.playbackRate = rate;
   }
 
   return region;

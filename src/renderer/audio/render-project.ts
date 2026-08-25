@@ -2,7 +2,7 @@ import { WorkletSynthesizer, audioBufferToWav } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
-import { ccCenterOffset, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, oscillatorFrequency, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { MidiNote, MidiProject, MidiTrack } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
@@ -341,8 +341,6 @@ function scheduleSfzSource(
   crossfadeGain = 1,
   getCC?: (controller: number) => number,
 ): void {
-  const source = context.createBufferSource();
-  source.buffer = buffer;
   // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
   const keytrack = region.keytrack ?? 100;
   const velocityOffset = (note.velocity - 64) / 63;
@@ -352,14 +350,33 @@ function scheduleSfzSource(
   const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
     + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
   const baseRate = 2 ** (semitones / 12);
+  const playbackRate = region.playbackRate ?? 1;
   // A：触发延迟（供所有调度共用）。
   const startAt = startSec + (region.delay ?? 0);
-  source.playbackRate.setValueAtTime(baseRate, startAt);
-  if ((region.loopMode === "continuous" || region.loopMode === "sustain")
-    && region.loopStart !== undefined && region.loopEnd !== undefined && region.loopEnd > region.loopStart) {
-    source.loop = true;
-    source.loopStart = region.loopStart / buffer.sampleRate;
-    source.loopEnd = region.loopEnd / buffer.sampleRate;
+
+  let source: AudioScheduledSourceNode;
+  let offsetSec = 0;
+  let playDuration = 0;
+  if (region.oscillator) {
+    const osc = context.createOscillator();
+    osc.type = region.oscillator;
+    const modSemitones = semitones - (note.pitch - region.keyCenter);
+    osc.frequency.value = oscillatorFrequency(note.pitch, modSemitones) * playbackRate;
+    source = osc;
+  } else {
+    const bufferSource = context.createBufferSource();
+    bufferSource.buffer = buffer;
+    bufferSource.playbackRate.setValueAtTime(baseRate * playbackRate, startAt);
+    if ((region.loopMode === "continuous" || region.loopMode === "sustain")
+      && region.loopStart !== undefined && region.loopEnd !== undefined && region.loopEnd > region.loopStart) {
+      bufferSource.loop = true;
+      bufferSource.loopStart = region.loopStart / buffer.sampleRate;
+      bufferSource.loopEnd = region.loopEnd / buffer.sampleRate;
+    }
+    offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
+    const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
+    playDuration = Math.max(0.001, endSec - offsetSec);
+    source = bufferSource;
   }
   const gainNode = context.createGain();
   // 力度 → 音量（amp_veltrack，默认 100=力度完全决定；0=力度不影响）。
@@ -397,28 +414,33 @@ function scheduleSfzSource(
     gainNode.gain.setValueAtTime(sustainGain, releaseStart);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, stopSec);
   }
-  // F：调制 —— pitch LFO 叠加到 playbackRate。
+  // F：调制 —— pitch LFO 叠加到 pitch 参数。
+  const pitchParam = region.oscillator
+    ? (source as OscillatorNode).frequency
+    : (source as AudioBufferSourceNode).playbackRate;
+  const pitchBase = region.oscillator
+    ? (source as OscillatorNode).frequency.value
+    : baseRate * playbackRate;
   if (region.pitchLfoFreq && region.pitchLfoDepth) {
     const osc = context.createOscillator();
     configureLfo(context, osc, region.pitchLfoShape, region.pitchLfoPhase);
     osc.frequency.value = region.pitchLfoFreq;
     const depth = context.createGain();
-    depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
-    osc.connect(depth).connect(source.playbackRate);
+    depth.gain.value = pitchBase * (2 ** (region.pitchLfoDepth / 1200) - 1);
+    osc.connect(depth).connect(pitchParam);
     osc.start(startAt + (region.pitchLfoDelay ?? 0));
   }
-  // F：pitch 包络 —— 对 playbackRate 调度 attack→decay→sustain 电平。
+  // F：pitch 包络 —— 对 pitch 参数调度 attack→decay→sustain 电平。
   if (region.pitchEnvDepth !== undefined && region.pitchEnvDepth !== 0) {
-    const envRate = baseRate * (2 ** (region.pitchEnvDepth / 1200) - 1);
+    const envRate = pitchBase * (2 ** (region.pitchEnvDepth / 1200) - 1);
     const envAttack = region.pitchEnvAttack ?? 0.005;
     const envDecay = region.pitchEnvDecay ?? 0;
     const envSustain = region.pitchEnvSustain !== undefined ? Math.max(0, region.pitchEnvSustain) / 100 : 0;
-    const rate = source.playbackRate;
-    rate.cancelScheduledValues(startAt);
-    rate.setValueAtTime(baseRate, startAt);
-    rate.linearRampToValueAtTime(baseRate + envRate, startAt + envAttack);
+    pitchParam.cancelScheduledValues(startAt);
+    pitchParam.setValueAtTime(pitchBase, startAt);
+    pitchParam.linearRampToValueAtTime(pitchBase + envRate, startAt + envAttack);
     if (envDecay > 0) {
-      rate.linearRampToValueAtTime(baseRate + envRate * envSustain, startAt + envAttack + envDecay);
+      pitchParam.linearRampToValueAtTime(pitchBase + envRate * envSustain, startAt + envAttack + envDecay);
     }
   }
   let chain: AudioNode = source;
@@ -475,12 +497,17 @@ function scheduleSfzSource(
   }
   chain.connect(gainNode);
   output.connect(context.destination);
-  // 采样 offset/end 截取。
-  const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
-  const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
-  const playDuration = Math.max(0.001, endSec - offsetSec);
-  source.start(startAt, offsetSec, playDuration);
-  source.stop(Math.min(stopSec + 0.05, startAt + playDuration + 0.05));
+  if (region.oscillator) {
+    source.start(startAt);
+    source.stop(stopSec + 0.05);
+  } else {
+    // 采样 offset/end 截取。
+    const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
+    const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
+    const playDuration = Math.max(0.001, endSec - offsetSec);
+    (source as AudioBufferSourceNode).start(startAt, offsetSec, playDuration);
+    source.stop(Math.min(stopSec + 0.05, startAt + playDuration + 0.05));
+  }
 }
 
 /** 离线 LFO 配置：非 sine 用 type；sine 指定 phase 用 PeriodicWave 起振。 */

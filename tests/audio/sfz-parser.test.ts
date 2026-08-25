@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ccCenterOffset,
   nextKeyswitchState,
+  oscillatorFrequency,
   parseSfzText,
   pickSfzRegions,
   pickSfzRegionsWithGain,
@@ -263,6 +264,16 @@ describe("parseSfzText", () => {
     `);
     expect(regions[0]).toMatchObject({ ccAmpN: 64, ccAmpDepth: 80, ccPitchN: 1, ccPitchDepth: 200, ccCutoffN: 2, ccCutoffDepth: 500, ccPanN: 3, ccPanDepth: -50 });
   });
+
+  it("解析 v2 合成（oscillator/playback_rate）", () => {
+    const { regions } = parseSfzText(`
+      <region> oscillator=saw playback_rate=0.5
+      <region> oscillator=sine playback_rate=2
+    `);
+    expect(regions[0]).toMatchObject({ oscillator: "sawtooth", playbackRate: 0.5 });
+    expect(regions[1]).toMatchObject({ oscillator: "sine", playbackRate: 2 });
+    expect(parseSfzText(`<region> sample=a.wav`).regions[0].oscillator).toBeUndefined();
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -466,5 +477,13 @@ describe("ccCenterOffset", () => {
     expect(ccCenterOffset(200, 64)).toBe(0);
     expect(ccCenterOffset(200, 127)).toBeCloseTo(200, 5);
     expect(ccCenterOffset(200, 0)).toBeCloseTo(-200 * 64 / 63, 5);
+  });
+});
+
+describe("oscillatorFrequency", () => {
+  it("A4(69)=440Hz，每 +12 半音翻倍", () => {
+    expect(oscillatorFrequency(69, 0)).toBeCloseTo(440, 5);
+    expect(oscillatorFrequency(81, 0)).toBeCloseTo(880, 5);
+    expect(oscillatorFrequency(69, 12)).toBeCloseTo(880, 5);
   });
 });
