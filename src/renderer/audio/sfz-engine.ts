@@ -120,13 +120,14 @@ export class SfzEngine {
     return this.ccState.get(channel)?.get(controller) ?? 64;
   }
 
-  /** 设置控制器值：CC64 从按住变松开时释放延音中的音符。 */
+  /** 设置控制器值：CC64 从按住变松开时释放延音中的音符；CC 值变化触发 on_cc 区域。 */
   setCC(channel: number, controller: number, value: number): void {
     let map = this.ccState.get(channel);
     if (!map) {
       map = new Map();
       this.ccState.set(channel, map);
     }
+    const previous = map.get(controller);
     const wasDown = (map.get(64) ?? 0) > 63;
     map.set(controller, value);
     if (controller === 64 && wasDown && value <= 63) {
@@ -134,6 +135,27 @@ export class SfzEngine {
       if (held) {
         this.heldNotes.delete(channel);
         for (const entry of held) this.release(entry);
+      }
+    }
+    // on_cc：CC 值变化时触发匹配区域（短促播放一次，不登记延音）。
+    if (previous !== value) this.playOnCCTrigger(controller, value);
+  }
+
+  /** on_cc 触发：CC 值达到 region.onccValue 时短促播放该区域。 */
+  private playOnCCTrigger(controller: number, value: number): void {
+    const now = this.context.currentTime;
+    for (const library of this.libraries.values()) {
+      const triggered = library.regions.filter((region) => region.onccN === controller && region.onccValue === value);
+      for (const region of triggered) {
+        const note = Math.round(((region.lokey ?? 0) + (region.hikey ?? 127)) / 2);
+        void (async () => {
+          try {
+            const buffer = await library.ensureSample(this.context, region.samplePath);
+            this.startShortSource(region, buffer, note, value, now);
+          } catch {
+            // 采样缺失忽略。
+          }
+        })();
       }
     }
   }

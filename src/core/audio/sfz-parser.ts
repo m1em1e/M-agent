@@ -39,6 +39,15 @@ export function parseSfzText(text: string): SfzParseResult {
     const trimmed = rawLine.trim();
     if (!trimmed || trimmed.startsWith("//")) continue;
 
+    // #include 变体（SFZ v2 语法）：#include "path" / #include path。
+    if (trimmed.startsWith("#include")) {
+      flushRegion();
+      const raw = trimmed.slice("#include".length).trim();
+      const path = raw.replace(/^["']|["']$/g, "").trim();
+      if (path) includes.push(path);
+      continue;
+    }
+
     if (trimmed.startsWith("<")) {
       // <include>path</include>：单独处理（不含 opcode）。
       const includeMatch = /^<include>\s*(.+?)\s*<\/include>\s*$/i.exec(trimmed);
@@ -573,6 +582,15 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
     const rate = Number(opcodes.get("playback_rate"));
     if (Number.isFinite(rate) && rate > 0) region.playbackRate = rate;
   }
+
+  // hint_* 元数据：解析存储（对发声无影响）。
+  const hints: Record<string, number> = {};
+  for (const [key, value] of opcodes) {
+    if (!key.startsWith("hint_")) continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) hints[key] = parsed;
+  }
+  if (Object.keys(hints).length > 0) region.hints = hints;
 
   return region;
 }

@@ -221,6 +221,8 @@ export interface SfzRegion {
   oscillator?: OscillatorType;
   /** 采样播放速率 / 振荡器频率倍率（playback_rate）。 */
   playbackRate?: number;
+  /** hint_* 元数据（如 hint_keyboard、hint_steam_selfmask），对发声无影响。 */
+  hints?: Record<string, number>;
 }
 
 /** Renderer 可见的库条目摘要。 */

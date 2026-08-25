@@ -209,6 +209,16 @@ describe("parseSfzText", () => {
     expect(parsed.regions).toHaveLength(1);
   });
 
+  it("解析 #include 变体与 hint_* 元数据", () => {
+    const parsed = parseSfzText(`
+      #include "sub/keys.sfz"
+      #include samples/vel.sfz
+      <region> sample=a.wav hint_keyboard=1 hint_steam_selfmask=0
+    `);
+    expect(parsed.includes).toEqual(["sub/keys.sfz", "samples/vel.sfz"]);
+    expect(parsed.regions[0].hints).toEqual({ hint_keyboard: 1, hint_steam_selfmask: 0 });
+  });
+
   it("解析 LFO 与 pitch 包络 opcode", () => {
     const { regions } = parseSfzText(`
       <region> sample=a.wav pitch_lfo_freq=5 pitch_lfo_depth=10 pan_lfo_freq=3 pan_lfo_depth=20 amp_lfo_freq=6 amp_lfo_depth=15 pitch_env_depth=50 pitch_env_attack=0.1 pitch_env_decay=0.3 pitch_env_sustain=40
