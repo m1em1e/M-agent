@@ -34,10 +34,10 @@ export async function parseSf2Presets(path: string): Promise<SoundFontPresetInfo
  * sample 相对路径以 .sfz 所在目录（叠加 <control> default_path）解析为绝对路径。
  * <include> 子文件递归加载（相对本文件目录，visited 防循环），合并其 regions。
  */
-export async function parseSfz(path: string, visited = new Set<string>()): Promise<{ presetName: string; regions: SfzRegion[] }> {
+export async function parseSfz(path: string, visited = new Set<string>()): Promise<{ presetName: string; regions: SfzRegion[]; files: string[] }> {
   const resolvedPath = resolve(path);
   const presetName = basename(path).replace(/\.sfz$/i, "");
-  if (visited.has(resolvedPath)) return { presetName, regions: [] };
+  if (visited.has(resolvedPath)) return { presetName, regions: [], files: [] };
   visited.add(resolvedPath);
   const text = await readFile(path, "utf8");
   const parsed = parseSfzText(text);
@@ -49,11 +49,13 @@ export async function parseSfz(path: string, visited = new Set<string>()): Promi
     ...region,
     samplePath: resolveSamplePath(sampleBase, region.samplePath),
   }));
+  const files = [resolvedPath];
   for (const include of parsed.includes ?? []) {
     const sub = await parseSfz(resolve(baseDir, include), visited);
     regions.push(...sub.regions);
+    files.push(...sub.files);
   }
-  return { presetName, regions };
+  return { presetName, regions, files };
 }
 
 function resolveSamplePath(base: string, sample: string): string {

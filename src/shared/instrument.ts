@@ -159,6 +159,20 @@ export interface SfzRegion {
   filEnvSustain?: number;
   /** 力度→音量响应曲线（力度点 → 音量 0–1，amp_velcurve_N）。 */
   velCurve?: Record<number, number>;
+  /** release 触发采样延迟（秒，release_time）。 */
+  releaseTime?: number;
+  /** 力度→音高调制（cents，pitch_veltrack）。 */
+  pitchVelTrack?: number;
+  /** 力度→滤波截止调制（Hz，cutoff_veltrack）。 */
+  cutoffVelTrack?: number;
+  /** 力度→声像调制（0–100，pan_veltrack）。 */
+  panVelTrack?: number;
+  /** 音高 LFO 延迟（秒）。 */
+  pitchLfoDelay?: number;
+  /** 声像 LFO 延迟（秒）。 */
+  panLfoDelay?: number;
+  /** 音量 LFO 延迟（秒）。 */
+  ampLfoDelay?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

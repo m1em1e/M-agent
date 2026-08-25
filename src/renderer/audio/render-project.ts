@@ -320,9 +320,11 @@ function scheduleSfzSource(
 ): void {
   const source = context.createBufferSource();
   source.buffer = buffer;
-  // A：keytrack（键跟随）/ pitchOffset（半音）与 tuning 一同修正音高。
+  // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack 与 tuning 一同修正音高。
   const keytrack = region.keytrack ?? 100;
-  const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0);
+  const velocityOffset = (note.velocity - 64) / 63;
+  const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
+    + (region.pitchVelTrack ?? 0) * velocityOffset;
   const baseRate = 2 ** (semitones / 12);
   // A：触发延迟（供所有调度共用）。
   const startAt = startSec + (region.delay ?? 0);
@@ -371,7 +373,7 @@ function scheduleSfzSource(
     const depth = context.createGain();
     depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
     osc.connect(depth).connect(source.playbackRate);
-    osc.start(startAt);
+    osc.start(startAt + (region.pitchLfoDelay ?? 0));
   }
   // F：pitch 包络 —— 对 playbackRate 调度 attack→decay→sustain 电平。
   if (region.pitchEnvDepth !== undefined && region.pitchEnvDepth !== 0) {
@@ -391,11 +393,13 @@ function scheduleSfzSource(
   if (region.filterType && region.cutoffHz) {
     const filter = context.createBiquadFilter();
     filter.type = region.filterType === "bandreject" ? "notch" : region.filterType;
-    filter.frequency.value = region.cutoffHz;
+    // cutoff_veltrack：力度调制截止频率。
+    const cutoffOffset = (region.cutoffVelTrack ?? 0) * velocityOffset;
+    filter.frequency.value = region.cutoffHz + cutoffOffset;
     if (region.resonanceQ) filter.Q.value = region.resonanceQ;
     // 滤波包络：对 frequency 调度 attack→decay→sustain。
     if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
-      const baseFreq = region.cutoffHz;
+      const baseFreq = region.cutoffHz + cutoffOffset;
       const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
       const envAttack = region.filEnvAttack ?? 0.005;
       const envDecay = region.filEnvDecay ?? 0;
@@ -411,9 +415,9 @@ function scheduleSfzSource(
     chain = filter;
   }
   let output: AudioNode = gainNode;
-  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth)) {
+  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0)) {
     const panner = context.createStereoPanner();
-    panner.pan.value = region.pan / 100;
+    panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset;
     if (region.panLfoFreq && region.panLfoDepth) {
       const osc = context.createOscillator();
       osc.type = "sine";
@@ -421,7 +425,7 @@ function scheduleSfzSource(
       const depth = context.createGain();
       depth.gain.value = region.panLfoDepth / 100;
       osc.connect(depth).connect(panner.pan);
-      osc.start(startAt);
+      osc.start(startAt + (region.panLfoDelay ?? 0));
     }
     gainNode.connect(panner);
     output = panner;
@@ -433,7 +437,7 @@ function scheduleSfzSource(
     const depth = context.createGain();
     depth.gain.value = region.ampLfoDepth / 100;
     osc.connect(depth).connect(gainNode.gain);
-    osc.start(startAt);
+    osc.start(startAt + (region.ampLfoDelay ?? 0));
   }
   chain.connect(gainNode);
   output.connect(context.destination);

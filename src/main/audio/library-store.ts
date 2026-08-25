@@ -27,6 +27,8 @@ interface ScanCacheEntry {
   presets?: SoundFontPresetInfo[];
   presetName?: string;
   sfzRegions?: SfzRegion[];
+  /** 主文件 + include 链各文件的 mtime（path → mtime，用于 include 变更失效）。 */
+  fileMtimes?: Record<string, number>;
 }
 
 interface LibraryStoreSchema {
@@ -152,7 +154,7 @@ export async function listSystemInstruments(): Promise<InstrumentLibrarySummary[
         continue;
       }
     }
-    if (cached === undefined || cached.mtime !== mtimeMs) {
+    if (cached === undefined || cached.mtime !== mtimeMs || await includeFilesChanged(cached?.fileMtimes, file)) {
       try {
         parsed = await parseInstrumentFile(file);
         cache[file] = { ...parsed, mtime: mtimeMs };
@@ -218,7 +220,15 @@ async function parseInstrumentFile(path: string): Promise<Omit<ScanCacheEntry, "
     return { type, name: basename(path), presets };
   }
   const parsed = await parseSfz(path);
-  return { type, name: basename(path), presetName: parsed.presetName, sfzRegions: parsed.regions };
+  const fileMtimes: Record<string, number> = {};
+  for (const file of parsed.files) {
+    try {
+      fileMtimes[file] = (await stat(file)).mtimeMs;
+    } catch {
+      // 文件不可读时跳过（下次扫描将重新解析）。
+    }
+  }
+  return { type, name: basename(path), presetName: parsed.presetName, sfzRegions: parsed.regions, fileMtimes };
 }
 
 function toSummary(parsed: Omit<ScanCacheEntry, "mtime">, path: string, disabled: boolean): InstrumentLibrarySummary {
@@ -235,6 +245,21 @@ function toSummary(parsed: Omit<ScanCacheEntry, "mtime">, path: string, disabled
     createdAt: 0,
     updatedAt: 0,
   };
+}
+
+/** include 链任一文件 mtime 变化（或消失）时返回 true（主文件除外，已在外部比较）。 */
+async function includeFilesChanged(fileMtimes: Record<string, number> | undefined, mainPath: string): Promise<boolean> {
+  if (!fileMtimes) return false;
+  for (const [file, cachedMtime] of Object.entries(fileMtimes)) {
+    if (file === mainPath) continue;
+    try {
+      const info = await stat(file);
+      if (info.mtimeMs !== cachedMtime) return true;
+    } catch {
+      return true;
+    }
+  }
+  return false;
 }
 
 function basename(path: string): string {

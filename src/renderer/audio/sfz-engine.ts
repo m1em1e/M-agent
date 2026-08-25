@@ -45,7 +45,9 @@ export class SfzEngine {
       this.keyswitchActive.set(libraryId, note);
     }
     const keyswitch = this.keyswitchActive.get(libraryId);
-    const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch);
+    // trigger 补全：同 channel 已有活动音符 → legato。
+    const legato = this.hasActiveNoteOnChannel(channel);
+    const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch, legato);
     if (matched.length === 0) return;
     const now = this.context.currentTime;
     const items: ActiveSource[] = [];
@@ -82,7 +84,16 @@ export class SfzEngine {
     this.playReleaseTrigger(note);
   }
 
-  /** release 触发采样（trigger=release 区域）：noteOff 时短促播放，不登记延音。 */
+  /** 指定 channel 是否已有活动音符（用于 legato 触发判断）。 */
+  private hasActiveNoteOnChannel(channel: number): boolean {
+    const prefix = `${channel}:`;
+    for (const key of this.active.keys()) {
+      if (key.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /** release 触发采样（trigger=release 区域）：noteOff 时短促播放（按 release_time 延迟），不登记延音。 */
   private playReleaseTrigger(note: number): void {
     const now = this.context.currentTime;
     for (const library of this.libraries.values()) {
@@ -91,7 +102,7 @@ export class SfzEngine {
         void (async () => {
           try {
             const buffer = await library.ensureSample(this.context, region.samplePath);
-            this.startShortSource(region, buffer, note, 100, now);
+            this.startShortSource(region, buffer, note, 100, now + (region.releaseTime ?? 0));
           } catch {
             // 采样缺失忽略。
           }
@@ -162,7 +173,9 @@ export class SfzEngine {
     const startAt = now + (region.delay ?? 0);
     // A：keytrack（键跟随）/ pitchOffset（半音）与 tuning 一同修正音高。
     const keytrack = region.keytrack ?? 100;
-    const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0);
+    const velocityOffset = (velocity - 64) / 63;
+    const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
+      + (region.pitchVelTrack ?? 0) * velocityOffset;
     const baseRate = 2 ** (semitones / 12);
     source.playbackRate.setValueAtTime(baseRate, startAt);
     if ((region.loopMode === "continuous" || region.loopMode === "sustain")
@@ -210,7 +223,7 @@ export class SfzEngine {
       const depth = this.context.createGain();
       depth.gain.value = baseRate * (2 ** (region.pitchLfoDepth / 1200) - 1);
       osc.connect(depth).connect(source.playbackRate);
-      osc.start(startAt);
+      osc.start(startAt + (region.pitchLfoDelay ?? 0));
       lfos.push({ osc, gain: depth });
     }
     // F：pitch 包络 —— 对 playbackRate 调度 attack→decay→sustain 电平。
@@ -234,10 +247,12 @@ export class SfzEngine {
     if (region.filterType && region.cutoffHz) {
       const filter = this.context.createBiquadFilter();
       filter.type = toBiquadType(region.filterType);
-      filter.frequency.value = region.cutoffHz;
+      // cutoff_veltrack：力度调制截止频率。
+      const cutoffOffset = (region.cutoffVelTrack ?? 0) * ((velocity - 64) / 63);
+      filter.frequency.value = region.cutoffHz + cutoffOffset;
       if (region.resonanceQ) filter.Q.value = region.resonanceQ;
       if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
-        const baseFreq = region.cutoffHz;
+        const baseFreq = region.cutoffHz + cutoffOffset;
         const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
         const envAttack = region.filEnvAttack ?? 0.005;
         const envDecay = region.filEnvDecay ?? 0;
@@ -255,9 +270,10 @@ export class SfzEngine {
     }
 
     let output: AudioNode = gainNode;
-    if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth)) {
+    if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0)) {
       const panner = this.context.createStereoPanner();
-      panner.pan.value = region.pan / 100;
+      // pan_veltrack：力度调制声像。
+      panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * ((velocity - 64) / 63);
       // F：pan LFO 叠加到 panner.pan。
       if (region.panLfoFreq && region.panLfoDepth) {
         const osc = this.context.createOscillator();
@@ -266,7 +282,7 @@ export class SfzEngine {
         const depth = this.context.createGain();
         depth.gain.value = region.panLfoDepth / 100;
         osc.connect(depth).connect(panner.pan);
-        osc.start(startAt);
+        osc.start(startAt + (region.panLfoDelay ?? 0));
         lfos.push({ osc, gain: depth });
       }
       gainNode.connect(panner);
@@ -280,7 +296,7 @@ export class SfzEngine {
       const depth = this.context.createGain();
       depth.gain.value = region.ampLfoDepth / 100;
       osc.connect(depth).connect(gainNode.gain);
-      osc.start(startAt);
+      osc.start(startAt + (region.ampLfoDelay ?? 0));
       lfos.push({ osc, gain: depth });
     }
     chain.connect(gainNode);

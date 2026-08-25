@@ -117,11 +117,11 @@ export function pickSfzRegions(
   state?: SfzPickState,
   random: () => number = Math.random,
   keyswitch?: number,
+  legato = false,
 ): SfzRegion[] {
   const base = selectSfzRegions(regions, note, velocity);
   if (base.length === 0) return base;
-  const matched = base.filter((region) =>
-    trigger === "release" ? region.trigger === "release" : region.trigger !== "release");
+  const matched = base.filter((region) => matchTrigger(region.trigger, trigger, legato));
   if (matched.length === 0) return trigger === "release" ? matched : base;
 
   // D：keyswitch 过滤（总是应用）—— 有 sw_* 的区域需落在激活键区间内；无激活键时只选 sw_default。
@@ -185,6 +185,14 @@ export function sampleVelCurve(curve: Record<number, number> | undefined, veloci
   return curve[last];
 }
 
+/** trigger 匹配：release 只选 release；非 release 时 legato 选 legato 区域，否则选 attack/first/默认。 */
+function matchTrigger(regionTrigger: SfzRegion["trigger"], trigger: "attack" | "release", legato: boolean): boolean {
+  if (trigger === "release") return regionTrigger === "release";
+  if (regionTrigger === "release") return false;
+  if (regionTrigger === "legato") return legato;
+  return !legato;
+}
+
 /**
  * 带交叉淡化与选择策略的区域选择：返回命中区域及其音量系数。
  * 键/力度命中扩展到 xfin/xfout 范围；gain = 键淡化 × 力度淡化。
@@ -198,6 +206,7 @@ export function pickSfzRegionsWithGain(
   state?: SfzPickState,
   random: () => number = Math.random,
   keyswitch?: number,
+  legato = false,
 ): Array<{ region: SfzRegion; gain: number }> {
   const matched = regions.filter((region) => {
     // 有效键区：淡入起点到淡出终点；力度区同理。
@@ -207,7 +216,7 @@ export function pickSfzRegionsWithGain(
     const velLow = region.xfinLovel ?? region.lovel;
     const velHigh = region.xfoutHivel ?? region.hivel;
     if (velocity < velLow || velocity > velHigh) return false;
-    if (trigger === "release" ? region.trigger !== "release" : region.trigger === "release") return false;
+    if (!matchTrigger(region.trigger, trigger, legato)) return false;
     // keyswitch 过滤。
     if (region.swLokey !== undefined || region.swHikey !== undefined) {
       if (keyswitch === undefined ? region.swDefault !== 1
@@ -423,6 +432,17 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   }
   const curveKeys = Object.keys(curve);
   if (curveKeys.length > 0) region.velCurve = curve;
+
+  // trigger 补全：release_time。
+  if (opcodes.has("release_time")) region.releaseTime = parseSeconds(opcodes.get("release_time"));
+
+  // 调制补全：veltrack 变体与 LFO delay。
+  if (opcodes.has("pitch_veltrack")) region.pitchVelTrack = positiveInt(opcodes.get("pitch_veltrack") ?? "0");
+  if (opcodes.has("cutoff_veltrack")) region.cutoffVelTrack = positiveInt(opcodes.get("cutoff_veltrack") ?? "0");
+  if (opcodes.has("pan_veltrack")) region.panVelTrack = positiveInt(opcodes.get("pan_veltrack") ?? "0");
+  if (opcodes.has("pitch_lfo_delay")) region.pitchLfoDelay = parseSeconds(opcodes.get("pitch_lfo_delay"));
+  if (opcodes.has("pan_lfo_delay")) region.panLfoDelay = parseSeconds(opcodes.get("pan_lfo_delay"));
+  if (opcodes.has("amp_lfo_delay")) region.ampLfoDelay = parseSeconds(opcodes.get("amp_lfo_delay"));
 
   return region;
 }

@@ -55,13 +55,14 @@
 - **交叉淡化（键/力度）**：`xfin_lokey/hikey`、`xfout_lokey/hikey`、`xfin_lovel/hivel`、`xfout_lovel/hivel`（区域间键/力度过渡）；`xfin_ccN`/`xfout_ccN`（CC 淡化）未实现——需与 CC 状态统一做。
 - **滤波包络**：`fil_env_depth/attack/decay/sustain`（截止扫频）。
 - **力度曲线（多值）**：`amp_velcurve_N`（力度→音量曲线；与 `amp_veltrack` 并存，曲线优先）。
-- **trigger 完整语义**：`trigger=first`/`legato`、`release_time`（当前 `first`/`legato` 按 attack 简化）。
-- **调制补全**：LFO `delay`/`phase`/波形类型；`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`。
+- **trigger 完整语义**：`trigger=first`/`legato`（按同 channel 活动音符判断连奏）、`release_time`（release 采样延迟）；`release_time` 已支持。
+- **调制补全**：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay` 已支持；LFO `phase`（Web Audio OscillatorNode 无起始相位）与 LFO 波形类型未实现。
 - **keyswitch 补全**：`sw_last`/`sw_previous`。
 - **CC 调制**：`cc_*`、`oncc_*`、`set_cc`（MIDI CC 实时调制音色参数）。
 - **SFZ v2 合成**：`oscillator` 波形发声（非采样）、`playback_rate`。
 - **v2 控制指令**：`on_cc`、`#include` 变体、`hint_*`。
 - **include 变更监听**：主文件解析的 include 文件修改后，音源库扫描缓存（按 mtime）未链式失效，需重建扫描缓存。
+  已实现：`parseSfz` 返回 `files`（主 + include 链），`library-store` 缓存记录 `fileMtimes`，任一 include 文件 mtime 变化即重新解析。
 
 ## SFZ A–F 功能手动测试清单（尚未手动验证）
 

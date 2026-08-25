@@ -233,6 +233,16 @@ describe("parseSfzText", () => {
     expect(regions[0]).toMatchObject({ filEnvDepth: 400, filEnvAttack: 0.1, filEnvDecay: 0.2, filEnvSustain: 50 });
     expect(regions[0].velCurve).toEqual({ 30: 0.2, 100: 0.9 });
   });
+
+  it("解析 release_time、veltrack 变体与 LFO delay", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav release_time=0.05 pitch_veltrack=20 cutoff_veltrack=300 pan_veltrack=40 pitch_lfo_delay=0.1 pan_lfo_delay=0.2 amp_lfo_delay=0.3
+    `);
+    expect(regions[0]).toMatchObject({
+      releaseTime: 0.05, pitchVelTrack: 20, cutoffVelTrack: 300, panVelTrack: 40,
+      pitchLfoDelay: 0.1, panLfoDelay: 0.2, ampLfoDelay: 0.3,
+    });
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -252,6 +262,18 @@ describe("pickSfzRegions", () => {
   it("release 触发时只选 release 区域", () => {
     const matched = pickSfzRegions(regions, 60, 90, "release");
     expect(matched.map((region) => region.samplePath)).toEqual(["r.wav"]);
+  });
+
+  it("legato 触发时选 legato 区域，非连奏时选 attack/first", () => {
+    const legatoRegions = parseSfzText(`
+      <region> sample=attack.wav key=60
+      <region> sample=legato.wav key=60 trigger=legato
+      <region> sample=first.wav key=60 trigger=first
+    `).regions;
+    const nonLegato = pickSfzRegions(legatoRegions, 60, 90, "attack", undefined, Math.random, undefined, false);
+    expect(nonLegato.map((region) => region.samplePath)).toEqual(["attack.wav", "first.wav"]);
+    const inLegato = pickSfzRegions(legatoRegions, 60, 90, "attack", undefined, Math.random, undefined, true);
+    expect(inLegato.map((region) => region.samplePath)).toEqual(["legato.wav"]);
   });
 
   it("seq 轮换按触发计数选择对应位置", () => {

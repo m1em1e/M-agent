@@ -25,5 +25,11 @@ describe("parseSfz include", () => {
     const result = await parseSfz(join(dir, "main.sfz"));
     const samples = result.regions.map((region) => region.samplePath.replace(/\\/g, "/").split("/").pop());
     expect(samples).toEqual(["main.wav", "sub.wav", "loop.wav"]);
+    // files 应包含主文件与全部 include 链。
+    expect(result.files.map((file) => file.replace(/\\/g, "/"))).toEqual([
+      join(dir, "main.sfz").replace(/\\/g, "/"),
+      join(dir, "sub", "a.sfz").replace(/\\/g, "/"),
+      join(dir, "loop.sfz").replace(/\\/g, "/"),
+    ]);
   });
 });
