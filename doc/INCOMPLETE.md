@@ -84,6 +84,14 @@
 - **LFO 波形/相位**：`pitch_lfo_shape=triangle` 对比 sine 的颤音听感；`pitch_lfo_phase=180` 起始相位差异。
 - **include 变更监听**：修改主 SFZ 的 include 子文件后，重新「扫描音源库」应反映变更（缓存按 mtime 链式失效）。
 - **延音（noteOn/noteOff）**：Salamander 钢琴长音符按住持续、到结束 tick 释放；试听按音符时长延音；暂停/停止立即切断；循环区音符 on/off 正常。
+- **CC64 延音踏板（数据/SMF）**：MIDI 导入含 CC64（`0xb0`）的曲目应保留踏板事件；导出后再导入应还原；工程文件保存/重开保留 controllerEvents。
+- **CC64 延音踏板（播放/发声）**：导入含 CC64 的曲目播放——踏板踩下（127）时音符到结束 tick 不立即释放、松开（0）后统一释放（SoundFont 与 SFZ 均应如此）；试听无 CC 事件时踏板为默认 64。
+- **CC64 踏板 lane（UI 编辑）**：钢琴卷帘顶部 PEDAL lane——点击空白添加踩（127）、点击踩区间内添加松（0）；块随音符区正确绘制；删除/重开工程后保留。
+- **CC 淡化（xfin_ccN/xfout_ccN）**：`<region> sample=a.wav xfin_cc64=0 xfout_cc64=100`，CC64 从 0 到 100 变化时该区域音量线性渐入（配 CC64 踏板或外部 setCC 验证）。
+- **CC 触发切换（on_ccN）与变化触发（on_cc）**：`on_cc64=127` 区域仅在 CC64=127 时可选；CC 值变化到 127 时 on_cc 区域短促发声一次。
+- **ccN_* 参数调制**：`cc1_pitch=200`（CC1 调制音高）、`cc2_cutoff=500`（调制滤波）、`cc3_pan=-50`（调制声像）、`cc64_amp=80`（调制音量）——改变对应 CC 值应听到调制效果。
+- **v2 合成（oscillator/playback_rate）**：`<region> oscillator=saw key=60` 无采样也应发声（锯齿波）；`playback_rate=0.5` 采样/振荡器音高与时长减半；振荡器走 ADSR/滤波/LFO 链。
+- **v2 控制指令（#include/hint_*）**：`#include "sub/file.sfz"` 语法应生效（与 `<include>` 等价）；`hint_*` 解析不报错、不影响发声。
 
 ## 阶段 E：可靠性完善（下一阶段）
 
