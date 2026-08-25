@@ -201,6 +201,22 @@ export interface SfzRegion {
   onccN?: number;
   /** CC 触发切换：匹配值（on_ccN=value）。 */
   onccValue?: number;
+  /** CC→音量调制：控制器号（ccN_amp）。 */
+  ccAmpN?: number;
+  /** CC→音量调制深度（0–100，100=CC 完全决定音量）。 */
+  ccAmpDepth?: number;
+  /** CC→音高调制：控制器号（ccN_pitch）。 */
+  ccPitchN?: number;
+  /** CC→音高调制深度（cents）。 */
+  ccPitchDepth?: number;
+  /** CC→滤波截止调制：控制器号（ccN_cutoff）。 */
+  ccCutoffN?: number;
+  /** CC→滤波截止调制深度（Hz）。 */
+  ccCutoffDepth?: number;
+  /** CC→声像调制：控制器号（ccN_pan）。 */
+  ccPanN?: number;
+  /** CC→声像调制深度（-100..100）。 */
+  ccPanDepth?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

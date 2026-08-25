@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ccCenterOffset,
   nextKeyswitchState,
   parseSfzText,
   pickSfzRegions,
@@ -255,6 +256,13 @@ describe("parseSfzText", () => {
       panLfoShape: "square", ampLfoShape: "sawtooth", ampLfoPhase: 90,
     });
   });
+
+  it("解析 ccN_* 参数调制", () => {
+    const { regions } = parseSfzText(`
+      <region> sample=a.wav cc64_amp=80 cc1_pitch=200 cc2_cutoff=500 cc3_pan=-50
+    `);
+    expect(regions[0]).toMatchObject({ ccAmpN: 64, ccAmpDepth: 80, ccPitchN: 1, ccPitchDepth: 200, ccCutoffN: 2, ccCutoffDepth: 500, ccPanN: 3, ccPanDepth: -50 });
+  });
 });
 
 describe("pickSfzRegions", () => {
@@ -450,5 +458,13 @@ describe("CC 淡化与 oncc", () => {
     expect(matched.map((entry) => entry.region.samplePath)).toEqual(["b.wav"]);
     const notMatched = pickSfzRegionsWithGain([ccRegions[1]], 60, 90, "attack", undefined, Math.random, undefined, false, () => 0);
     expect(notMatched).toHaveLength(0);
+  });
+});
+
+describe("ccCenterOffset", () => {
+  it("CC 中间值 64 无偏移，127 为 +depth，0 为 -(64/63)·depth", () => {
+    expect(ccCenterOffset(200, 64)).toBe(0);
+    expect(ccCenterOffset(200, 127)).toBeCloseTo(200, 5);
+    expect(ccCenterOffset(200, 0)).toBeCloseTo(-200 * 64 / 63, 5);
   });
 });

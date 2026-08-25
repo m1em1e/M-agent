@@ -2,7 +2,7 @@ import { WorkletSynthesizer, audioBufferToWav } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
-import { pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { MidiNote, MidiProject, MidiTrack } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
@@ -307,14 +307,15 @@ async function renderPlainLayer(
       for (const note of track.notes) {
         const startSec = tickToSeconds(note.startTick, options.ppq, options.tempo);
         const stopSec = startSec + tickToSeconds(holdEndAt(note.startTick + note.durationTicks) - note.startTick, options.ppq, options.tempo);
-        for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack", undefined, Math.random, undefined, false, (c) => ccAt(note.startTick, c))) {
+        const ccQuery = (c: number) => ccAt(note.startTick, c);
+        for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack", undefined, Math.random, undefined, false, ccQuery)) {
           let buffer: AudioBuffer;
           try {
             buffer = await ensureSample(region.samplePath);
           } catch {
             continue;
           }
-          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1, gain);
+          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1, gain, ccQuery);
         }
       }
     }
@@ -338,14 +339,18 @@ function scheduleSfzSource(
   stopSec: number,
   volume: number,
   crossfadeGain = 1,
+  getCC?: (controller: number) => number,
 ): void {
   const source = context.createBufferSource();
   source.buffer = buffer;
-  // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack 与 tuning 一同修正音高。
+  // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
   const keytrack = region.keytrack ?? 100;
   const velocityOffset = (note.velocity - 64) / 63;
+  const ccPitchOffset = region.ccPitchN !== undefined && getCC
+    ? ccCenterOffset(region.ccPitchDepth ?? 0, getCC(region.ccPitchN))
+    : 0;
   const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
-    + (region.pitchVelTrack ?? 0) * velocityOffset;
+    + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
   const baseRate = 2 ** (semitones / 12);
   // A：触发延迟（供所有调度共用）。
   const startAt = startSec + (region.delay ?? 0);
@@ -364,6 +369,12 @@ function scheduleSfzSource(
   if (veltrack !== undefined && veltrack !== 100) {
     const t = Math.max(0, Math.min(100, veltrack)) / 100;
     velocityFactor = t * velocityFactor + (1 - t);
+  }
+  if (region.ccAmpN !== undefined && getCC) {
+    const depth = region.ccAmpDepth ?? 100;
+    const t = Math.max(-100, Math.min(100, depth)) / 100;
+    const ccNorm = Math.max(0, Math.min(1, getCC(region.ccAmpN) / 127));
+    velocityFactor = t * (ccNorm * velocityFactor) + (1 - Math.abs(t)) * velocityFactor;
   }
   const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, volume)) * Math.max(0, Math.min(1, crossfadeGain));
   // 完整 ADSR 包络。
@@ -414,8 +425,9 @@ function scheduleSfzSource(
   if (region.filterType && region.cutoffHz) {
     const filter = context.createBiquadFilter();
     filter.type = region.filterType === "bandreject" ? "notch" : region.filterType;
-    // cutoff_veltrack：力度调制截止频率。
-    const cutoffOffset = (region.cutoffVelTrack ?? 0) * velocityOffset;
+    // cutoff_veltrack / ccN_cutoff：力度与 CC 调制截止频率。
+    const cutoffOffset = (region.cutoffVelTrack ?? 0) * velocityOffset
+      + (region.ccCutoffN !== undefined && getCC ? ccCenterOffset(region.ccCutoffDepth ?? 0, getCC(region.ccCutoffN)) : 0);
     filter.frequency.value = region.cutoffHz + cutoffOffset;
     if (region.resonanceQ) filter.Q.value = region.resonanceQ;
     // 滤波包络：对 frequency 调度 attack→decay→sustain。
@@ -436,9 +448,10 @@ function scheduleSfzSource(
     chain = filter;
   }
   let output: AudioNode = gainNode;
-  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0)) {
+  const ccPanOffset = region.ccPanN !== undefined && getCC ? ccCenterOffset((region.ccPanDepth ?? 0) / 100, getCC(region.ccPanN)) : 0;
+  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0) {
     const panner = context.createStereoPanner();
-    panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset;
+    panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset + ccPanOffset;
     if (region.panLfoFreq && region.panLfoDepth) {
       const osc = context.createOscillator();
       configureLfo(context, osc, region.panLfoShape, region.panLfoPhase);

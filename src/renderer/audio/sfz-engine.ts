@@ -1,4 +1,4 @@
-import { nextKeyswitchState, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, nextKeyswitchState, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 将 SFZ 滤波器类型映射到 Web Audio BiquadFilterType（bandreject → notch）。 */
@@ -77,7 +77,7 @@ export class SfzEngine {
       } catch {
         continue;
       }
-      const item = this.startSustainedSource(region, buffer, note, velocity, now, gain);
+      const item = this.startSustainedSource(region, buffer, note, velocity, now, gain, (c) => this.getCC(channel, c));
       if (item) {
         items.push(item);
         releaseSeconds = Math.max(releaseSeconds, region.release ?? 0.1);
@@ -222,16 +222,20 @@ export class SfzEngine {
     velocity: number,
     now: number,
     crossfadeGain = 1,
+    getCC?: (controller: number) => number,
   ): ActiveSource | null {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     // A：触发延迟（供所有调度共用）。
     const startAt = now + (region.delay ?? 0);
-    // A：keytrack（键跟随）/ pitchOffset（半音）与 tuning 一同修正音高。
+    // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
     const keytrack = region.keytrack ?? 100;
     const velocityOffset = (velocity - 64) / 63;
+    const ccPitchOffset = region.ccPitchN !== undefined && getCC
+      ? ccCenterOffset(region.ccPitchDepth ?? 0, getCC(region.ccPitchN))
+      : 0;
     const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
-      + (region.pitchVelTrack ?? 0) * velocityOffset;
+      + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
     const baseRate = 2 ** (semitones / 12);
     source.playbackRate.setValueAtTime(baseRate, startAt);
     if ((region.loopMode === "continuous" || region.loopMode === "sustain")
@@ -255,6 +259,13 @@ export class SfzEngine {
     if (veltrack !== undefined && veltrack !== 100) {
       const t = Math.max(0, Math.min(100, veltrack)) / 100;
       velocityFactor = t * velocityFactor + (1 - t);
+    }
+    // ccN_amp：CC 值（0–127）调制音量（depth 0–100，负值反向）。
+    if (region.ccAmpN !== undefined && getCC) {
+      const depth = region.ccAmpDepth ?? 100;
+      const t = Math.max(-100, Math.min(100, depth)) / 100;
+      const ccNorm = Math.max(0, Math.min(1, getCC(region.ccAmpN) / 127));
+      velocityFactor = t * (ccNorm * velocityFactor) + (1 - Math.abs(t)) * velocityFactor;
     }
     const peak = Math.pow(10, region.volume / 20) * velocityFactor * Math.max(0, Math.min(1, crossfadeGain));
 
@@ -304,7 +315,8 @@ export class SfzEngine {
       const filter = this.context.createBiquadFilter();
       filter.type = toBiquadType(region.filterType);
       // cutoff_veltrack：力度调制截止频率。
-      const cutoffOffset = (region.cutoffVelTrack ?? 0) * ((velocity - 64) / 63);
+      const cutoffOffset = (region.cutoffVelTrack ?? 0) * ((velocity - 64) / 63)
+      + (region.ccCutoffN !== undefined && getCC ? ccCenterOffset(region.ccCutoffDepth ?? 0, getCC(region.ccCutoffN)) : 0);
       filter.frequency.value = region.cutoffHz + cutoffOffset;
       if (region.resonanceQ) filter.Q.value = region.resonanceQ;
       if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
@@ -326,10 +338,11 @@ export class SfzEngine {
     }
 
     let output: AudioNode = gainNode;
-    if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0)) {
+    const ccPanOffset = region.ccPanN !== undefined && getCC ? ccCenterOffset((region.ccPanDepth ?? 0) / 100, getCC(region.ccPanN)) : 0;
+    if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0) {
       const panner = this.context.createStereoPanner();
-      // pan_veltrack：力度调制声像。
-      panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * ((velocity - 64) / 63);
+      // pan_veltrack / ccN_pan：力度与 CC 调制声像。
+      panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * ((velocity - 64) / 63) + ccPanOffset;
       // F：pan LFO 叠加到 panner.pan。
       if (region.panLfoFreq && region.panLfoDepth) {
         const osc = this.context.createOscillator();

@@ -168,6 +168,11 @@ function crossfadeGain(value: number, inStart: number, inEnd: number, outStart: 
   return 1;
 }
 
+/** CC→音高/滤波/声像的中心调制偏移（CC 中间值 64 无偏移，`ccValue` 0–127）。 */
+export function ccCenterOffset(depth: number, ccValue: number): number {
+  return depth * ((ccValue - 64) / 63);
+}
+
 /** 力度曲线插值：按力度从 velCurve 表中线性插值音量系数（无表返回 undefined）。 */
 export function sampleVelCurve(curve: Record<number, number> | undefined, velocity: number): number | undefined {
   if (!curve) return undefined;
@@ -536,6 +541,20 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   ccPair(/^xfin_cc(\d+)$/, (cc, value) => { region.xfinCcN = cc; region.xfinCcValue = value; });
   ccPair(/^xfout_cc(\d+)$/, (cc, value) => { region.xfoutCcN = cc; region.xfoutCcValue = value; });
   ccPair(/^on_cc(\d+)$/, (cc, value) => { region.onccN = cc; region.onccValue = value; });
+
+  // ccN_* 参数调制：ccN_amp / ccN_pitch / ccN_cutoff / ccN_pan。
+  for (const [key, value] of opcodes) {
+    const match = /^cc(\d+)_(amp|pitch|cutoff|pan)$/i.exec(key);
+    if (!match) continue;
+    const cc = Number(match[1]);
+    if (!Number.isInteger(cc) || cc < 0 || cc > 127) continue;
+    const depth = Number(value);
+    if (!Number.isFinite(depth)) continue;
+    if (match[2] === "amp") { region.ccAmpN = cc; region.ccAmpDepth = depth; }
+    else if (match[2] === "pitch") { region.ccPitchN = cc; region.ccPitchDepth = depth; }
+    else if (match[2] === "cutoff") { region.ccCutoffN = cc; region.ccCutoffDepth = depth; }
+    else { region.ccPanN = cc; region.ccPanDepth = depth; }
+  }
 
   return region;
 }
