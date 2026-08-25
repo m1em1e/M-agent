@@ -64,16 +64,25 @@
 - **include 变更监听**：主文件解析的 include 文件修改后，音源库扫描缓存（按 mtime）未链式失效，需重建扫描缓存。
   已实现：`parseSfz` 返回 `files`（主 + include 链），`library-store` 缓存记录 `fileMtimes`，任一 include 文件 mtime 变化即重新解析。
 
-## SFZ A–F 功能手动测试清单（尚未手动验证）
+## SFZ 已实现功能手动测试清单（A–F 及后续新功能，均尚未手动验证）
 
-> A–F 为已实现的 SFZ 能力，自动化单测已覆盖解析器/选择器；以下为**真实音源试听**层面的手动验证。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。另需补充已实现新功能的验证：交叉淡化（`xfin_lokey=36 xfout_hikey=64` 边界试听音量渐变）、滤波包络（`fil_env_depth` 音头滤波扫频）、力度曲线（`amp_velcurve_N` 各力度点音量差异）。
+> 以下均为**真实音源试听**层面的手动验证；自动化单测已覆盖解析器/选择器逻辑，但不验证实际听感。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。
 
 - **A · 补全与别名**：`tune`/`pitch`（Salamander Retuned 用 `tune=10`，与主版音高对比应一致）；`delay=0.05`（发声延迟）；`pitch_keytrack=0`（不同键音高不变）；`pitch_offset=12`（音高上移一个八度）。
 - **B · 滤波器**：同一采样两份 SFZ `fil_type=lowpass cutoff=300` vs `cutoff=8000`，对比低频版发闷（高频被滤）；`resonance=20` 增强共振峰。
 - **C · 分组行为**：`seq_length=2` + `seq_position=1/2`（两个不同音高采样）连续点击同一键，应交替发声；`random=0` 与 `random=100` 区域多次触发观察随机变体；`trigger=release` 区域在 noteOff 时发声。
 - **D · keyswitch**：`sw_lokey=72 sw_hikey=72` 与 `sw_lokey=60 sw_hikey=60` 两组区域，按 72/60 键后再按普通键，应切换到对应音色层；无激活键时 `sw_default=1` 区域生效。
 - **E · include**：主 SFZ `<include>sub/piano.sfz</include>` + 子文件（含 `default_path` 与采样），扫描后应合并发声；include 循环应被截断（不卡死）。
-- **F · 调制**：`pitch_lfo_freq=6 pitch_lfo_depth=15` 长音符应可听颤音；`pan_lfo_freq=2 pan_lfo_depth=50` 声像左右摆动；`amp_lfo_freq=5 amp_lfo_depth=20` 音量抖动；`pitch_env_depth=100`（上行滑音包络）音头音高变化。
+- **F · 调制（LFO/pitch 包络）**：`pitch_lfo_freq=6 pitch_lfo_depth=15` 长音符应可听颤音；`pan_lfo_freq=2 pan_lfo_depth=50` 声像左右摆动；`amp_lfo_freq=5 amp_lfo_depth=20` 音量抖动；`pitch_env_depth=100`（上行滑音包络）音头音高变化。
+- **交叉淡化（键/力度）**：`lokey=40 hikey=60 xfin_lokey=36 xfout_hikey=64` 边界附近试听音量渐变（36→40 渐入、60→64 渐出）；力度淡化同理用 `xfin_lovel`/`xfout_hivel`。
+- **滤波包络（fil_env）**：`fil_env_depth=400 fil_env_attack=0.1 fil_env_decay=0.2` 音头截止扫频（发亮→回落）；`fil_env_sustain` 控制回落后电平。
+- **力度曲线（amp_velcurve）**：`amp_velcurve_30=0.2 amp_velcurve_100=0.9` 不同力度触发，音量按曲线插值（非默认线性）。
+- **trigger 补全（first/legato/release_time）**：`trigger=legato` 区域仅在连奏（前音仍按）时发声；`trigger=first` 区域首音发声；`release_time=0.05` release 采样延迟触发。
+- **调制补全（veltrack/LFO delay）**：`pitch_veltrack`（力度越大音越高）、`cutoff_veltrack`（力度越大滤波越开）、`pan_veltrack`（力度越大声像越偏）；`*_lfo_delay` LFO 延迟起振。
+- **keyswitch 补全（sw_last/sw_previous）**：`sw_last=0` 区域松开 keyswitch 键后回默认；`sw_previous=1` 区域按此键回退到上一个激活键。
+- **LFO 波形/相位**：`pitch_lfo_shape=triangle` 对比 sine 的颤音听感；`pitch_lfo_phase=180` 起始相位差异。
+- **include 变更监听**：修改主 SFZ 的 include 子文件后，重新「扫描音源库」应反映变更（缓存按 mtime 链式失效）。
+- **延音（noteOn/noteOff）**：Salamander 钢琴长音符按住持续、到结束 tick 释放；试听按音符时长延音；暂停/停止立即切断；循环区音符 on/off 正常。
 
 ## 阶段 E：可靠性完善（下一阶段）
 
