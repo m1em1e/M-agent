@@ -37,6 +37,10 @@ export class SfzEngine {
   private readonly seqCounts = new Map<number, number>();
   /** keyswitch 状态机（按 libraryId）。 */
   private readonly keyswitchStates = new Map<string, { activeKey?: number; previousKey?: number; last?: boolean }>();
+  /** CC 状态：channel → controller → value。 */
+  private readonly ccState = new Map<number, Map<number, number>>();
+  /** CC64 踏板延音中（尚未松踏板）的音符：channel → ActiveNote[]。 */
+  private readonly heldNotes = new Map<number, ActiveNote[]>();
 
   constructor(private readonly context: AudioContext) {}
 
@@ -60,7 +64,8 @@ export class SfzEngine {
     const keyswitch = this.keyswitchStates.get(libraryId)?.activeKey;
     // trigger 补全：同 channel 已有活动音符 → legato。
     const legato = this.hasActiveNoteOnChannel(channel);
-    const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch, legato);
+    const getCC = (controller: number) => this.getCC(channel, controller);
+    const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch, legato, getCC);
     if (matched.length === 0) return;
     const now = this.context.currentTime;
     const items: ActiveSource[] = [];
@@ -92,7 +97,14 @@ export class SfzEngine {
     if (list && list.length > 0) {
       const entry = list.pop()!;
       if (list.length === 0) this.active.delete(key);
-      this.release(entry);
+      // CC64 踏板按住时延音：进入 held，松踏板时统一 release。
+      if (this.getCC(channel, 64) > 63) {
+        const held = this.heldNotes.get(channel) ?? [];
+        held.push(entry);
+        this.heldNotes.set(channel, held);
+      } else {
+        this.release(entry);
+      }
     }
     // keyswitch：若释放的是某库当前激活键且该库 sw_last=0 → 回退默认。
     for (const [libraryId, state] of this.keyswitchStates) {
@@ -101,6 +113,29 @@ export class SfzEngine {
       }
     }
     this.playReleaseTrigger(note);
+  }
+
+  /** 读取当前 CC 值（未设置默认 64）。 */
+  getCC(channel: number, controller: number): number {
+    return this.ccState.get(channel)?.get(controller) ?? 64;
+  }
+
+  /** 设置控制器值：CC64 从按住变松开时释放延音中的音符。 */
+  setCC(channel: number, controller: number, value: number): void {
+    let map = this.ccState.get(channel);
+    if (!map) {
+      map = new Map();
+      this.ccState.set(channel, map);
+    }
+    const wasDown = (map.get(64) ?? 0) > 63;
+    map.set(controller, value);
+    if (controller === 64 && wasDown && value <= 63) {
+      const held = this.heldNotes.get(channel);
+      if (held) {
+        this.heldNotes.delete(channel);
+        for (const entry of held) this.release(entry);
+      }
+    }
   }
 
   /** 指定 channel 是否已有活动音符（用于 legato 触发判断）。 */
@@ -116,7 +151,7 @@ export class SfzEngine {
   private playReleaseTrigger(note: number): void {
     const now = this.context.currentTime;
     for (const library of this.libraries.values()) {
-      const matched = pickSfzRegions(library.regions, note, 100, "release", { seqCounts: this.seqCounts }, Math.random);
+      const matched = pickSfzRegions(library.regions, note, 100, "release", { seqCounts: this.seqCounts }, Math.random, undefined, false, (c) => this.getCC(0, c));
       for (const region of matched) {
         void (async () => {
           try {
@@ -170,6 +205,8 @@ export class SfzEngine {
     this.active.clear();
     this.seqCounts.clear();
     this.keyswitchStates.clear();
+    this.ccState.clear();
+    this.heldNotes.clear();
   }
 
   dispose(): void {

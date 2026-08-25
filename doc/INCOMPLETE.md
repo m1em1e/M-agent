@@ -59,6 +59,7 @@
 - **调制补全**：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay` 已支持；LFO `*_lfo_shape`（sine/triangle/square/sawtooth）与 `*_lfo_phase`（sine 用 PeriodicWave 起振）已支持。
 - **keyswitch 补全**：`sw_last`/`sw_previous` 已支持（切换后保持 / 回退上一键）。
 - **CC 调制**：`cc_*`、`oncc_*`、`set_cc`（MIDI CC 实时调制音色参数）。
+  已支持：轨级 `controllerEvents`（含 CC64 延音踏板）、SMF `0xb0` 导入导出、播放/导出应用 CC、SFZ `xfin_ccN`/`xfout_ccN` CC 淡化、`on_ccN` CC 触发切换、CC64 踏板延音（SoundFont 经 controllerChange、SFZ held 音符统一释放）、钢琴卷帘 CC64 lane 编辑；`ccN_*` 参数调制（cc 值调制 amp/pitch/cutoff/pan）未实现。
 - **SFZ v2 合成**：`oscillator` 波形发声（非采样）、`playback_rate`。
 - **v2 控制指令**：`on_cc`、`#include` 变体、`hint_*`。
 - **include 变更监听**：主文件解析的 include 文件修改后，音源库扫描缓存（按 mtime）未链式失效，需重建扫描缓存。

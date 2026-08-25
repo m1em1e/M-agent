@@ -283,10 +283,31 @@ async function renderPlainLayer(
       return promise;
     };
     for (const track of group.tracks) {
+      const events = track.controllerEvents ?? [];
+      // CC 值查询：≤ tick 的最后事件值，无则 64。
+      const ccAt = (tick: number, controller: number): number => {
+        let value = 64;
+        for (const event of events) {
+          if (event.controller === controller && event.tick <= tick) value = event.value;
+        }
+        return value;
+      };
+      // CC64 踏板段：endTick 落在踩区间时音符延长到区间末。
+      const holdEndAt = (endTick: number): number => {
+        const cc64 = events.filter((event) => event.controller === 64).sort((a, b) => a.tick - b.tick);
+        for (let i = 0; i < cc64.length; i += 1) {
+          if (cc64[i].value > 63 && endTick >= cc64[i].tick) {
+            const released = cc64.slice(i + 1).find((event) => event.value <= 63);
+            if (released && endTick < released.tick) return released.tick;
+            if (!released) return Number.MAX_SAFE_INTEGER;
+          }
+        }
+        return endTick;
+      };
       for (const note of track.notes) {
         const startSec = tickToSeconds(note.startTick, options.ppq, options.tempo);
-        const stopSec = startSec + tickToSeconds(note.durationTicks, options.ppq, options.tempo);
-        for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack")) {
+        const stopSec = startSec + tickToSeconds(holdEndAt(note.startTick + note.durationTicks) - note.startTick, options.ppq, options.tempo);
+        for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack", undefined, Math.random, undefined, false, (c) => ccAt(note.startTick, c))) {
           let buffer: AudioBuffer;
           try {
             buffer = await ensureSample(region.samplePath);

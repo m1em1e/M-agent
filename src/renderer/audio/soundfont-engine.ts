@@ -51,6 +51,11 @@ export class SoundFontSynthHost {
     this.synth.noteOff(channel, note);
   }
 
+  /** 发送控制器消息（CC，如 CC64 延音踏板）。 */
+  controllerChange(channel: number, controller: number, value: number): void {
+    this.synth.controllerChange(channel, controller as unknown as Parameters<typeof this.synth.controllerChange>[1], value);
+  }
+
   stopAll(): void {
     this.synth.stopAll(true);
   }

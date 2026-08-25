@@ -118,10 +118,12 @@ export function pickSfzRegions(
   random: () => number = Math.random,
   keyswitch?: number,
   legato = false,
+  cc?: (controller: number) => number,
 ): SfzRegion[] {
   const base = selectSfzRegions(regions, note, velocity);
   if (base.length === 0) return base;
-  const matched = base.filter((region) => matchTrigger(region.trigger, trigger, legato));
+  const matched = base.filter((region) => matchTrigger(region.trigger, trigger, legato)
+    && (!region.onccN || !cc || cc(region.onccN) === (region.onccValue ?? 0)));
   if (matched.length === 0) return trigger === "release" ? matched : base;
 
   // D：keyswitch 过滤（总是应用）—— 有 sw_* 的区域需落在激活键区间内；无激活键时只选 sw_default。
@@ -239,6 +241,7 @@ export function pickSfzRegionsWithGain(
   random: () => number = Math.random,
   keyswitch?: number,
   legato = false,
+  cc?: (controller: number) => number,
 ): Array<{ region: SfzRegion; gain: number }> {
   const matched = regions.filter((region) => {
     // 有效键区：淡入起点到淡出终点；力度区同理。
@@ -253,6 +256,10 @@ export function pickSfzRegionsWithGain(
     if (region.swLokey !== undefined || region.swHikey !== undefined) {
       if (keyswitch === undefined ? region.swDefault !== 1
         : keyswitch < (region.swLokey ?? 0) || keyswitch > (region.swHikey ?? 127)) return false;
+    }
+    // CC 触发切换（on_ccN）：CC 当前值需匹配。
+    if (region.onccN !== undefined && cc) {
+      if (cc(region.onccN) !== (region.onccValue ?? 0)) return false;
     }
     return true;
   });
@@ -278,11 +285,21 @@ export function pickSfzRegionsWithGain(
     selection = kept.length > 0 ? kept : selection;
   }
 
-  return selection.map((region) => ({
-    region,
-    gain: crossfadeGain(note, region.xfinLokey ?? region.lokey, region.xfinHikey ?? region.lokey, region.xfoutLokey ?? region.hikey, region.xfoutHikey ?? region.hikey)
-      * crossfadeGain(velocity, region.xfinLovel ?? region.lovel, region.xfinHivel ?? region.lovel, region.xfoutLovel ?? region.hivel, region.xfoutHivel ?? region.hivel),
-  }));
+  return selection.map((region) => {
+    let gain = crossfadeGain(note, region.xfinLokey ?? region.lokey, region.xfinHikey ?? region.lokey, region.xfoutLokey ?? region.hikey, region.xfoutHikey ?? region.hikey)
+      * crossfadeGain(velocity, region.xfinLovel ?? region.lovel, region.xfinHivel ?? region.lovel, region.xfoutLovel ?? region.hivel, region.xfoutHivel ?? region.hivel);
+    // CC 交叉淡化：xfin_ccN（淡入起点）→ xfout_ccN（淡出终点）。
+    if (region.xfinCcN !== undefined && cc) {
+      const ccValue = cc(region.xfinCcN);
+      const fadeIn = region.xfinCcValue ?? 0;
+      const fadeOut = region.xfoutCcN === region.xfinCcN ? (region.xfoutCcValue ?? 127) : 127;
+      if (ccValue < fadeIn || ccValue > fadeOut) return null;
+      if (fadeOut !== fadeIn) {
+        gain *= (ccValue - fadeIn) / (fadeOut - fadeIn);
+      }
+    }
+    return { region, gain };
+  }).filter((entry): entry is { region: SfzRegion; gain: number } => entry !== null);
 }
 
 function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
@@ -505,6 +522,20 @@ function buildRegion(opcodes: Map<string, string>): SfzRegion | null {
   // keyswitch 补全：sw_last / sw_previous。
   if (opcodes.has("sw_last")) region.swLast = positiveInt(opcodes.get("sw_last") ?? "0");
   if (opcodes.has("sw_previous")) region.swPrevious = positiveInt(opcodes.get("sw_previous") ?? "0");
+
+  // CC：xfin_ccN / xfout_ccN（CC 淡化）与 on_ccN（CC 触发切换）。
+  const ccPair = (pattern: RegExp, onMatch: (cc: number, value: number) => void): void => {
+    for (const [key, value] of opcodes) {
+      const match = pattern.exec(key);
+      if (!match) continue;
+      const cc = Number(match[1]);
+      if (!Number.isInteger(cc) || cc < 0 || cc > 127) continue;
+      onMatch(cc, positiveInt(value));
+    }
+  };
+  ccPair(/^xfin_cc(\d+)$/, (cc, value) => { region.xfinCcN = cc; region.xfinCcValue = value; });
+  ccPair(/^xfout_cc(\d+)$/, (cc, value) => { region.xfoutCcN = cc; region.xfoutCcValue = value; });
+  ccPair(/^on_cc(\d+)$/, (cc, value) => { region.onccN = cc; region.onccValue = value; });
 
   return region;
 }

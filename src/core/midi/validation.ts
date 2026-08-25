@@ -68,6 +68,20 @@ export function validateTrack(track: MidiTrack, path = "track"): ValidationIssue
       error("INVALID_TRACK_LOOP", "Track loop end must be after a non-negative start tick.", `${path}.loopRegion`),
     );
   }
+  const ccIds = new Set<string>();
+  (track.controllerEvents ?? []).forEach((event, index) => {
+    const eventPath = `${path}.controllerEvents[${index}]`;
+    if (typeof event.id !== "string" || event.id.trim().length === 0) {
+      issues.push(error("INVALID_CC_ID", "Controller event ID must not be empty.", `${eventPath}.id`));
+    }
+    if (ccIds.has(event.id)) {
+      issues.push(error("DUPLICATE_CC_ID", `Duplicate controller event ID '${event.id}'.`, `${eventPath}.id`));
+    }
+    ccIds.add(event.id);
+    integerRange(issues, event.tick, 0, Number.MAX_SAFE_INTEGER, `${eventPath}.tick`, "INVALID_CC_TICK");
+    integerRange(issues, event.controller, 0, 127, `${eventPath}.controller`, "INVALID_CC_CONTROLLER");
+    integerRange(issues, event.value, 0, 127, `${eventPath}.value`, "INVALID_CC_VALUE");
+  });
   return issues;
 }
 

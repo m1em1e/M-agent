@@ -110,6 +110,13 @@ interface MidiNote {
   velocity: number;
 }
 
+interface ControllerEvent {
+  id: string;
+  tick: number;
+  controller: number;
+  value: number;
+}
+
 interface MidiTrack {
   id: string;
   name: string;
@@ -122,6 +129,7 @@ interface MidiTrack {
   volume?: number;
   instrument?: InstrumentReference;
   loopRegion?: TickRange | null;
+  controllerEvents?: ControllerEvent[];
   notes: MidiNote[];
 }
 
@@ -243,7 +251,11 @@ function normalizeTimeSignatureNumerator(numerator: number, denominator: number)
 }
 const KEY_WIDTH = 68;
 const RULER_HEIGHT = 30;
-const CANVAS_HEIGHT = RULER_HEIGHT + (MAX_PITCH - MIN_PITCH + 1) * ROW_HEIGHT;
+/** CC64 延音踏板 lane 高度（标尺下方、音符区顶部）。 */
+const CC_LANE_HEIGHT = 14;
+/** 音符区起点（标尺 + CC64 lane 之下）。 */
+const NOTES_TOP = RULER_HEIGHT + CC_LANE_HEIGHT;
+const CANVAS_HEIGHT = NOTES_TOP + (MAX_PITCH - MIN_PITCH + 1) * ROW_HEIGHT;
 const TRACK_COLORS = ["#ff9d78", "#b9e66c", "#73c8ff", "#c7a5ff", "#f4d66d", "#ff79a9"];
 
 let nextId = 100;
@@ -1359,7 +1371,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
 
   useLayoutEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = RULER_HEIGHT + (MAX_PITCH - 84) * ROW_HEIGHT;
+      scrollRef.current.scrollTop = NOTES_TOP + (MAX_PITCH - 84) * ROW_HEIGHT;
     }
   }, []);
 
@@ -1418,7 +1430,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     }
 
     for (let pitch = MAX_PITCH; pitch >= MIN_PITCH; pitch -= 1) {
-      const y = RULER_HEIGHT + (MAX_PITCH - pitch) * ROW_HEIGHT;
+      const y = NOTES_TOP + (MAX_PITCH - pitch) * ROW_HEIGHT;
       context.fillStyle = isBlackKey(pitch)
         ? themeColor("--canvas-black-row", "#0c0e10")
         : pitch % 12 === 0
@@ -1452,7 +1464,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         : themeColor("--canvas-beat-line", "rgba(235,235,220,.07)");
       context.lineWidth = isBar ? 1 : 0.7;
       context.beginPath();
-      context.moveTo(x + 0.5, RULER_HEIGHT);
+      context.moveTo(x + 0.5, NOTES_TOP);
       context.lineTo(x + 0.5, CANVAS_HEIGHT);
       context.stroke();
       if (isBar && beat < barCount * BEATS_PER_BAR) {
@@ -1479,14 +1491,47 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       const bgX = KEY_WIDTH + (selectedLoop.startTick / projectPpq) * beatWidth;
       const bgW = Math.max(0, ((selectedLoop.endTick - selectedLoop.startTick) / projectPpq) * beatWidth);
       context.fillStyle = "rgba(255,255,255,.03)";
-      context.fillRect(bgX, RULER_HEIGHT, bgW, CANVAS_HEIGHT - RULER_HEIGHT);
+      context.fillRect(bgX, NOTES_TOP, bgW, CANVAS_HEIGHT - NOTES_TOP);
+    }
+    // CC64 延音踏板 lane：显示选中轨道的踏板区间（值 > 63 的区间高亮）。
+    const laneTop = RULER_HEIGHT;
+    const selectedTrackForLane = tracks.find((track) => track.id === selectedTrackId);
+    context.fillStyle = "rgba(255,255,255,.02)";
+    context.fillRect(KEY_WIDTH, laneTop, canvasWidth - KEY_WIDTH, CC_LANE_HEIGHT);
+    context.strokeStyle = "rgba(255,255,255,.06)";
+    context.beginPath();
+    context.moveTo(KEY_WIDTH, NOTES_TOP + 0.5);
+    context.lineTo(canvasWidth, NOTES_TOP + 0.5);
+    context.stroke();
+    if (selectedTrackForLane) {
+      const ccEvents = (selectedTrackForLane.controllerEvents ?? [])
+        .filter((event) => event.controller === 64)
+        .sort((a, b) => a.tick - b.tick);
+      let holdStart: number | null = null;
+      const flush = (endTick: number) => {
+        if (holdStart === null) return;
+        const sx = KEY_WIDTH + (holdStart / projectPpq) * beatWidth;
+        const sw = Math.max(2, ((endTick - holdStart) / projectPpq) * beatWidth);
+        context.fillStyle = "rgba(255,217,102,.4)";
+        context.fillRect(sx, laneTop + 1, sw, CC_LANE_HEIGHT - 2);
+        holdStart = null;
+      };
+      for (const event of ccEvents) {
+        if (event.value > 63 && holdStart === null) holdStart = event.tick;
+        else if (event.value <= 63 && holdStart !== null) flush(event.tick);
+      }
+      if (holdStart !== null) flush(barCount * BEATS_PER_BAR * projectPpq);
+      context.fillStyle = "rgba(141,146,144,.7)";
+      context.font = "9px ui-monospace, monospace";
+      context.textBaseline = "middle";
+      context.fillText("PEDAL", KEY_WIDTH + 4, laneTop + CC_LANE_HEIGHT / 2 + 0.5);
     }
     for (const track of tracks) {
       const active = track.id === selectedTrackId;
       const audible = !track.muted && (!soloActive || track.solo);
       for (const note of track.notes) {
         const x = KEY_WIDTH + (note.startTick / projectPpq) * beatWidth;
-        const y = RULER_HEIGHT + (MAX_PITCH - note.pitch) * ROW_HEIGHT + 2;
+        const y = NOTES_TOP + (MAX_PITCH - note.pitch) * ROW_HEIGHT + 2;
         const width = Math.max(4, (note.durationTicks / projectPpq) * beatWidth - 2);
         const height = ROW_HEIGHT - 4;
         context.globalAlpha = audible ? (active ? 0.96 : 0.28) : 0.08;
@@ -1897,6 +1942,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             getAudioEngine()?.noteOff(track.channel, note.pitch);
           }
         }
+        // CC 事件（含 CC64 延音踏板）：到 tick 时触发 setCC。
+        for (const ccEvent of track.controllerEvents ?? []) {
+          const ccTick = nextCycleTick(ccEvent.tick, previous, period);
+          if (ccTick > previous && ccTick <= tick) {
+            getAudioEngine()?.setCC(track.channel, ccEvent.controller, ccEvent.value);
+          }
+        }
       });
       lastTickRef.current = tick;
       setPlayhead(tick % maxTick);
@@ -1920,14 +1972,14 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     if (!selectedTrack) return null;
     return [...selectedTrack.notes].reverse().find((note) => {
       const noteX = KEY_WIDTH + (note.startTick / projectPpq) * beatWidth;
-      const noteY = RULER_HEIGHT + (MAX_PITCH - note.pitch) * ROW_HEIGHT + 2;
+      const noteY = NOTES_TOP + (MAX_PITCH - note.pitch) * ROW_HEIGHT + 2;
       const noteW = Math.max(4, (note.durationTicks / projectPpq) * beatWidth - 2);
       return x >= noteX && x <= noteX + noteW && y >= noteY && y <= noteY + ROW_HEIGHT - 4;
     }) ?? null;
   };
 
   const tickAtX = (x: number) => Math.round(((x - KEY_WIDTH) / beatWidth) * projectPpq / gridTicks) * gridTicks;
-  const pitchAtY = (y: number) => clamp(MAX_PITCH - Math.floor((y - RULER_HEIGHT) / ROW_HEIGHT), MIN_PITCH, MAX_PITCH);
+  const pitchAtY = (y: number) => clamp(MAX_PITCH - Math.floor((y - NOTES_TOP) / ROW_HEIGHT), MIN_PITCH, MAX_PITCH);
 
   /** 命中 x 处选中轨道的循环带（非选中轨道循环为纯展示，不可编辑）。 */
   const loopBandAt = (x: number): { track: MidiTrack; range: TickRange; hit: "resize-start" | "resize-end" | "move" } | null => {
@@ -1966,7 +2018,29 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
       return;
     }
-    if (x <= KEY_WIDTH || y <= RULER_HEIGHT || !selectedTrack) return;
+    // CC64 延音踏板 lane：点击空白添加 127（踩），点击已踩区间内添加 0（松）。
+    if (y >= RULER_HEIGHT && y < NOTES_TOP && x > KEY_WIDTH && event.button === 0 && selectedTrackId) {
+      const tick = Math.max(0, tickAtX(x));
+      const laneTrack = tracks.find((item) => item.id === selectedTrackId);
+      if (laneTrack) {
+        const cc64 = (laneTrack.controllerEvents ?? [])
+          .filter((event) => event.controller === 64)
+          .sort((a, b) => a.tick - b.tick);
+        let insideHold = false;
+        for (let i = 0; i < cc64.length; i += 1) {
+          if (cc64[i].value > 63 && tick >= cc64[i].tick) {
+            const end = cc64.slice(i + 1).find((event) => event.value <= 63)?.tick ?? barCount * BEATS_PER_BAR * projectPpq;
+            if (tick < end) { insideHold = true; break; }
+          }
+        }
+        const event: ControllerEvent = { id: uid("cc"), tick, controller: 64, value: insideHold ? 0 : 127 };
+        commitTracks(tracks.map((item) => item.id === selectedTrackId
+          ? { ...item, controllerEvents: [...(item.controllerEvents ?? []), event].sort((a, b) => a.tick - b.tick || a.controller - b.controller) }
+          : item));
+      }
+      return;
+    }
+    if (x <= KEY_WIDTH || y <= NOTES_TOP || !selectedTrack) return;
     const hit = noteAtPoint(x, y);
     if (hit) {
       setSelectedNoteId(hit.id);
@@ -2111,7 +2185,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    if (x <= KEY_WIDTH || y <= RULER_HEIGHT || noteAtPoint(x, y) || !selectedTrack) return;
+    if (x <= KEY_WIDTH || y <= NOTES_TOP || noteAtPoint(x, y) || !selectedTrack) return;
     const note: MidiNote = { id: uid("note"), pitch: pitchAtY(y), startTick: Math.max(0, tickAtX(x)), durationTicks: projectPpq, velocity: 88 };
     commitTracks(tracks.map((track) => track.id === selectedTrackId ? { ...track, notes: [...track.notes, note] } : track));
     setSelectedNoteId(note.id);

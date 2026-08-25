@@ -189,6 +189,18 @@ export interface SfzRegion {
   swLast?: number;
   /** keyswitch 按此键时回退到上一个激活键（sw_previous）。 */
   swPrevious?: number;
+  /** CC 交叉淡化：控制器号（xfin_ccN）。 */
+  xfinCcN?: number;
+  /** CC 交叉淡化：淡入起点值（xfin_ccN=value）。 */
+  xfinCcValue?: number;
+  /** CC 交叉淡化：控制器号（xfout_ccN）。 */
+  xfoutCcN?: number;
+  /** CC 交叉淡化：淡出终点值（xfout_ccN=value）。 */
+  xfoutCcValue?: number;
+  /** CC 触发切换：控制器号（on_ccN）。 */
+  onccN?: number;
+  /** CC 触发切换：匹配值（on_ccN=value）。 */
+  onccValue?: number;
 }
 
 /** Renderer 可见的库条目摘要。 */

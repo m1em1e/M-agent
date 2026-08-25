@@ -26,6 +26,16 @@ export interface MidiNote {
   velocity: number;
 }
 
+/** MIDI 控制器事件（CC，如 CC64 延音踏板）。channel 取所属轨道的 channel。 */
+export interface ControllerEvent {
+  id: string;
+  tick: number;
+  /** 控制器号（0–127，如 64=延音踏板）。 */
+  controller: number;
+  /** 控制器值（0–127）。 */
+  value: number;
+}
+
 export interface MidiTrack {
   id: string;
   name: string;
@@ -41,6 +51,8 @@ export interface MidiTrack {
   instrument?: InstrumentReference;
   /** 轨道级循环区（分层循环播放用）；缺省或 null 表示该轨不循环、播完整曲。 */
   loopRegion?: TickRange | null;
+  /** 轨道控制器事件（CC），如 CC64 延音踏板；缺省为空。 */
+  controllerEvents?: ControllerEvent[];
 }
 
 export interface Revision {
@@ -103,6 +115,7 @@ export interface TrackInput {
   instrument?: InstrumentReference;
   loopRegion?: TickRange | null;
   notes?: NoteInput[];
+  controllerEvents?: ControllerEvent[];
 }
 
 export type MidiEditOperation =

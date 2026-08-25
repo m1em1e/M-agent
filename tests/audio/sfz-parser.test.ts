@@ -431,3 +431,24 @@ describe("nextKeyswitchState", () => {
     expect(next).toMatchObject({ activeKey: 96, last: false });
   });
 });
+
+describe("CC 淡化与 oncc", () => {
+  const ccRegions = parseSfzText(`
+    <region> sample=a.wav key=60 xfin_cc64=0 xfout_cc64=100
+    <region> sample=b.wav key=60 on_cc64=127
+  `).regions;
+
+  it("xfin_ccN 按 CC 值线性淡化 gain", () => {
+    const mid = pickSfzRegionsWithGain([ccRegions[0]], 60, 90, "attack", undefined, Math.random, undefined, false, (c) => c === 64 ? 50 : 0);
+    expect(mid[0].gain).toBeCloseTo(0.5, 5);
+    const zero = pickSfzRegionsWithGain([ccRegions[0]], 60, 90, "attack", undefined, Math.random, undefined, false, () => 0);
+    expect(zero[0].gain).toBeCloseTo(0, 5);
+  });
+
+  it("oncc：CC 值匹配才可选", () => {
+    const matched = pickSfzRegionsWithGain([ccRegions[1]], 60, 90, "attack", undefined, Math.random, undefined, false, (c) => c === 64 ? 127 : 0);
+    expect(matched.map((entry) => entry.region.samplePath)).toEqual(["b.wav"]);
+    const notMatched = pickSfzRegionsWithGain([ccRegions[1]], 60, 90, "attack", undefined, Math.random, undefined, false, () => 0);
+    expect(notMatched).toHaveLength(0);
+  });
+});

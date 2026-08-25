@@ -40,6 +40,7 @@ export function rendererPayloadToProject(payload: RendererProjectPayload): MidiP
       instrument: track.instrument,
       loopRegion: track.loopRegion,
       notes: track.notes,
+      controllerEvents: track.controllerEvents,
     }),
   );
   const validation = validateProject(project);
@@ -156,6 +157,17 @@ function assertTrackShapes(tracks: unknown[], context: string): void {
     if (value.loopRegion !== undefined && value.loopRegion !== null
       && !hasNumbers(value.loopRegion, "startTick", "endTick")) {
       throw new Error(`${context}的第 ${trackIndex + 1} 条轨道循环区无效。`);
+    }
+    if (value.controllerEvents !== undefined) {
+      if (!Array.isArray(value.controllerEvents)) {
+        throw new Error(`${context}的第 ${trackIndex + 1} 条轨道控制器事件无效。`);
+      }
+      for (const [ccIndex, cc] of value.controllerEvents.entries()) {
+        if (!isRecord(cc) || typeof cc.id !== "string" || typeof cc.tick !== "number"
+          || typeof cc.controller !== "number" || typeof cc.value !== "number") {
+          throw new Error(`${context}的第 ${trackIndex + 1} 条轨道中，第 ${ccIndex + 1} 个控制器事件结构无效。`);
+        }
+      }
     }
     noteCount += value.notes.length;
     if (noteCount > 200_000) throw new Error(`${context}的音符数量超过上限。`);

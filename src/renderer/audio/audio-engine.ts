@@ -109,6 +109,12 @@ export class AudioEngine {
     this.activeOscillators.clear();
   }
 
+  /** 设置控制器值（CC）：SoundFont 走合成器 controllerChange（含 CC64 踏板），SFZ 维护 CC 状态。 */
+  setCC(channel: number, controller: number, value: number): void {
+    this.synthHost?.controllerChange(channel, controller, value);
+    this.sfzEngine?.setCC(channel, controller, value);
+  }
+
   private noteOnOscillator(context: AudioContext, channel: number, note: number, velocity: number, volume: number): void {
     const key = `${channel}:${note}`;
     // 同键重复触发：先停旧的再起新的。

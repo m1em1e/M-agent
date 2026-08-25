@@ -14,6 +14,7 @@ export interface ProjectVersionTrackSource {
   solo: boolean;
   loopRegion?: { startTick: number; endTick: number } | null;
   notes: Array<{ id?: string; pitch: number; startTick: number; durationTicks: number; velocity: number }>;
+  controllerEvents?: Array<{ id?: string; tick: number; controller: number; value: number }>;
 }
 
 export interface ProjectVersionSource {
@@ -57,6 +58,11 @@ export function projectVersionOf(payload: ProjectVersionSource): string {
         startTick: note.startTick,
         durationTicks: note.durationTicks,
         velocity: note.velocity,
+      })),
+      controllerEvents: (track.controllerEvents ?? []).map((event) => ({
+        tick: event.tick,
+        controller: event.controller,
+        value: event.value,
       })),
     })),
     tempoMap: (payload.tempoMap ?? []).map((event) => ({ tick: event.tick, bpm: event.bpm })),

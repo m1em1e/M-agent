@@ -82,6 +82,7 @@ export function createMidiTrack(input: TrackInput, idFactory: IdFactory = create
     instrument: input.instrument,
     loopRegion: input.loopRegion,
     notes: (input.notes ?? []).map((note) => createMidiNote(note, idFactory)),
+    controllerEvents: input.controllerEvents?.map((event) => ({ ...event, id: event.id ?? idFactory("cc") })),
   };
 }
 
@@ -97,6 +98,7 @@ export function cloneMidiProject(project: MidiProject): MidiProject {
         ? track.loopRegion
         : { ...track.loopRegion },
       notes: track.notes.map((note) => ({ ...note })),
+      controllerEvents: track.controllerEvents?.map((event) => ({ ...event })),
     })),
     revisions: project.revisions.map((revision) => ({ ...revision })),
     agentSessions: project.agentSessions.map((session) => ({

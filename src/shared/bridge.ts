@@ -32,6 +32,12 @@ export interface RendererTrack {
   volume?: number;
   instrument?: InstrumentReference;
   loopRegion?: TickRange | null;
+  controllerEvents?: Array<{
+    id: string;
+    tick: number;
+    controller: number;
+    value: number;
+  }>;
   notes: Array<{
     id: string;
     pitch: number;

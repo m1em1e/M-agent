@@ -117,3 +117,20 @@ describe("MIDI parser safety", () => {
     expect(() => importMidi(smpte)).toThrow(/SMPTE/);
   });
 });
+
+describe("CC 事件往返（含 CC64 延音踏板）", () => {
+  it("导出写 0xb0、导入还原 controllerEvents", () => {
+    const source = projectFixture();
+    source.tracks[0].controllerEvents = [
+      { id: "c1", tick: 480, controller: 64, value: 127 },
+      { id: "c2", tick: 1440, controller: 64, value: 0 },
+    ];
+    const encoded = exportMidi(source, { format: 1 });
+    const result = importMidi(encoded, { title: "rt" });
+    const melody = result.project.tracks.find((track) => track.channel === 0);
+    expect(melody?.controllerEvents).toEqual([
+      expect.objectContaining({ tick: 480, controller: 64, value: 127 }),
+      expect.objectContaining({ tick: 1440, controller: 64, value: 0 }),
+    ]);
+  });
+});

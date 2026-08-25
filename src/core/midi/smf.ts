@@ -43,6 +43,7 @@ interface ParsedTrack {
   programChangeCounts: Map<number, number>;
   tempos: TempoEvent[];
   timeSignatures: TimeSignatureEvent[];
+  controllerEvents: Array<{ tick: number; channel: number; controller: number; value: number }>;
   endTick: number;
 }
 
@@ -117,6 +118,10 @@ export function importMidi(bytes: Uint8Array, options: MidiImportOptions = {}): 
         muted: false,
         solo: false,
         notes,
+        controllerEvents: parsed.controllerEvents
+          .filter((event) => event.channel === channel)
+          .map((event) => ({ id: idFactory("cc"), tick: event.tick, controller: event.controller, value: event.value }))
+          .sort((a, b) => a.tick - b.tick || a.controller - b.controller),
       });
       if ((parsed.programChangeCounts.get(channel) ?? 0) > 1) {
         warnings.push({
@@ -163,6 +168,7 @@ function parseTrack(bytes: Uint8Array, trackIndex: number, warnings: MidiImportW
     programChangeCounts: new Map(),
     tempos: [],
     timeSignatures: [],
+    controllerEvents: [],
     endTick: 0,
   };
   const activeNotes = new Map<string, Array<{ tick: number; velocity: number; sequence: number }>>();
@@ -228,6 +234,8 @@ function parseTrack(bytes: Uint8Array, trackIndex: number, warnings: MidiImportW
     if (eventType === 0xc0) {
       track.programs.set(channel, data1);
       track.programChangeCounts.set(channel, (track.programChangeCounts.get(channel) ?? 0) + 1);
+    } else if (eventType === 0xb0) {
+      track.controllerEvents.push({ tick, channel, controller: data1, value: data2! });
     } else if (eventType === 0x90 && data2! > 0) {
       const key = `${channel}:${data1}`;
       const active = activeNotes.get(key) ?? [];
@@ -285,6 +293,9 @@ function buildTrackEvents(track: MidiTrack): RawEvent[] {
     events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xb0 | track.channel, 32, track.instrument.bank % 128] });
   }
   events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xc0 | track.channel, track.program] });
+  for (const event of track.controllerEvents ?? []) {
+    events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xb0 | track.channel, event.controller, event.value] });
+  }
   for (const note of track.notes) {
     events.push({ tick: note.startTick, priority: 3, sequence: sequence++, bytes: [0x90 | track.channel, note.pitch, note.velocity] });
     events.push({ tick: note.startTick + note.durationTicks, priority: 2, sequence: sequence++, bytes: [0x80 | track.channel, note.pitch, 0] });
@@ -306,6 +317,9 @@ function buildTypeZeroEvents(project: MidiProject): RawEvent[] {
     for (const note of track.notes) {
       events.push({ tick: note.startTick, priority: 3, sequence: sequence++, bytes: [0x90 | track.channel, note.pitch, note.velocity] });
       events.push({ tick: note.startTick + note.durationTicks, priority: 2, sequence: sequence++, bytes: [0x80 | track.channel, note.pitch, 0] });
+    }
+    for (const event of track.controllerEvents ?? []) {
+      events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xb0 | track.channel, event.controller, event.value] });
     }
   }
   return events;
