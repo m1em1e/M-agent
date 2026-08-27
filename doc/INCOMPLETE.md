@@ -41,32 +41,40 @@
 
 ## 音源系统已知限制
 
-- **SFZ 简化边界**：已支持完整 ADSR 包络（`amp_env_*`/`ampeg_*` 两前缀，含 decay/sustain/hold）、采样 `offset`/`end` 截取、力度曲线 `amp_veltrack`、
-  `tune`/`pitch` 别名与 `delay`/`pitch_keytrack`/`pitch_offset`、滤波器（`fil_type`/`cutoff`/`resonance`）、分组行为（`seq_length`/`seq_position` 轮换、`random`、`trigger` attack/release）、
-  keyswitch（`sw_lokey`/`sw_hikey`/`sw_default`）、`<include>` 递归加载、LFO 调制（pitch/pan/amp）与 pitch 包络；
-  未实现 `fil_env`（滤波包络）、`amp_velcurve`（多值力度曲线）、`trigger first`/`legato` 完整语义；采样按需懒解码，首次发声个别采样可能延迟。
-- **CC64 延音踏板未支持**：当前延音为音符级 noteOn/noteOff（SoundFont / SFZ / 振荡器统一释放）；MIDI CC64 延音踏板（sustain pedal）尚未实现，需扩展 MidiNote/工程数据、SMF 导入导出与钢琴卷帘 UI。
+- **SFZ 简化边界**：已支持 `<global>/<group>/<region>/<control>` 继承、注释、引号路径与 `<include>`/`#include` 递归加载；
+  完整 ADSR 包络（`amp_env_*`/`ampeg_*` 两前缀）、采样 `offset`/`end` 截取与 `loop_start`/`loop_end`、
+  力度 `amp_veltrack` 与多值曲线 `amp_velcurve_N`、`tune`/`pitch` 别名与 `delay`/`pitch_keytrack`/`pitch_offset`、
+  滤波器 `fil_type`/`cutoff`/`resonance` 与滤波包络 `fil_env`、分组行为（`seq_length`/`seq_position` 轮换、`random`、`trigger` release/legato）、
+  keyswitch（`sw_lokey`/`sw_hikey`/`sw_default` 与 `sw_last`/`sw_previous` 状态机）、
+  LFO 调制（pitch/pan/amp，含 `*_lfo_shape`/`*_lfo_phase`/`*_lfo_delay`）与 pitch 包络、`*_veltrack` 变体、`release_time`、
+  CC 调制（轨级 `controllerEvents`、SMF `0xb0` 往返、`xfin_ccN`/`xfout_ccN` 淡化、`on_ccN`/`on_cc` 触发、`ccN_amp/pitch/cutoff/pan`、CC64 踏板延音）、
+  v2 合成（`oscillator` 波形 / `playback_rate`）与 `hint_*` 元数据；
+  未实现 `set_cc`（SFZ 内显式赋值 CC）、`trigger=first` 完整语义（单声部独占，当前按 attack 处理）、`group`/`off_by` 复音抢夺等其余 v1/v2 opcode；
+  采样按需懒解码，首次发声个别采样可能延迟。
 - **VST3 完全未接入**（无扫描/加载/MIDI/音频/参数/State/插件 UI）。调研结论：`nvst3-host` 不适合生产
   （无进程隔离、无音频 I/O、Intel Mac 无预编译、Linux 需 glibc≥2.28）；替代方向为独立原生音频服务（JUCE/Rust），
   或先做 Node PoC。当前定位轻量试听，高级处理由用户导出 MIDI 到专业 DAW。
 - **播放调度**为 rAF 驱动逐音符触发，轻量试听够用；采样级精确需改用 AudioContext 时钟调度（非紧急）。
 
-## SFZ 未完成项（相对 SFZ v1/v2 全量）
+## SFZ v1/v2 覆盖情况（相对 SFZ v1/v2 全量）
 
-- **交叉淡化（键/力度）**：`xfin_lokey/hikey`、`xfout_lokey/hikey`、`xfin_lovel/hivel`、`xfout_lovel/hivel`（区域间键/力度过渡）；`xfin_ccN`/`xfout_ccN`（CC 淡化）未实现——需与 CC 状态统一做。
-- **滤波包络**：`fil_env_depth/attack/decay/sustain`（截止扫频）。
-- **力度曲线（多值）**：`amp_velcurve_N`（力度→音量曲线；与 `amp_veltrack` 并存，曲线优先）。
-- **trigger 完整语义**：`trigger=first`/`legato`（按同 channel 活动音符判断连奏）、`release_time`（release 采样延迟）；`release_time` 已支持。
-- **调制补全**：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay` 已支持；LFO `*_lfo_shape`（sine/triangle/square/sawtooth）与 `*_lfo_phase`（sine 用 PeriodicWave 起振）已支持。
-- **keyswitch 补全**：`sw_last`/`sw_previous` 已支持（切换后保持 / 回退上一键）。
-- **CC 调制**：`cc_*`、`oncc_*`、`set_cc`（MIDI CC 实时调制音色参数）。
-  已支持：轨级 `controllerEvents`（含 CC64 延音踏板）、SMF `0xb0` 导入导出、播放/导出应用 CC、SFZ `xfin_ccN`/`xfout_ccN` CC 淡化、`on_ccN` CC 触发切换、`ccN_amp`/`ccN_pitch`/`ccN_cutoff`/`ccN_pan` 参数调制、CC64 踏板延音（SoundFont 经 controllerChange、SFZ held 音符统一释放）、钢琴卷帘 CC64 lane 编辑。
-- **SFZ v2 合成**：`oscillator` 波形发声（OscillatorNode，非采样，含 ADSR/滤波/LFO/CC 调制链）、`playback_rate`（采样变速变调 / 振荡器频率倍率）。
-- **v2 控制指令**：`on_cc`（CC 值变化触发区域，短促播放）、`#include` 变体（`#include "path"` 语法）、`hint_*` 元数据（解析存储，对发声无影响）。
-- **include 变更监听**：主文件解析的 include 文件修改后，音源库扫描缓存（按 mtime）未链式失效，需重建扫描缓存。
-  已实现：`parseSfz` 返回 `files`（主 + include 链），`library-store` 缓存记录 `fileMtimes`，任一 include 文件 mtime 变化即重新解析。
+- **已实现**（解析/选择逻辑已有单测覆盖；听感验证见下方「SFZ 已实现功能手动测试清单」）：
+  - 键/力度交叉淡化：`xfin_lokey/hikey`、`xfout_lokey/hikey`、`xfin_lovel/hivel`、`xfout_lovel/hivel`（区域间键/力度过渡），以及 `xfin_ccN`/`xfout_ccN` CC 淡化。
+  - 滤波包络 `fil_env_depth/attack/decay/sustain`（截止扫频）与多值力度曲线 `amp_velcurve_N`（与 `amp_veltrack` 并存，曲线优先）。
+  - trigger：`release`、`legato`（按同 channel 活动音符判断连奏）与 `release_time`。
+  - 调制补全：`pitch_veltrack`/`cutoff_veltrack`/`pan_veltrack`、LFO `delay`、LFO `*_lfo_shape`（sine/triangle/square/sawtooth）与 `*_lfo_phase`（sine 用 PeriodicWave 起振）。
+  - keyswitch 补全：`sw_last`/`sw_previous`（切换后保持 / 回退上一键）。
+  - CC 调制：轨级 `controllerEvents`（含 CC64 延音踏板）、SMF `0xb0` 导入导出、播放/导出应用 CC、`xfin_ccN`/`xfout_ccN` CC 淡化、`on_ccN` CC 触发切换、`on_cc` CC 变化触发、`ccN_amp`/`ccN_pitch`/`ccN_cutoff`/`ccN_pan` 参数调制、CC64 踏板延音（SoundFont 经 controllerChange、SFZ held 音符统一释放）、钢琴卷帘 CC64 lane 编辑。
+  - SFZ v2：`oscillator` 波形发声（OscillatorNode，非采样，含 ADSR/滤波/LFO/CC 调制链）、`playback_rate`（采样变速变调 / 振荡器频率倍率）、`#include` 变体（`#include "path"` 语法）与 `hint_*` 元数据（解析存储，对发声无影响）。
+  - include 变更监听：`parseSfz` 返回 `files`（主 + include 链），`library-store` 缓存记录 `fileMtimes`，任一 include 文件 mtime 变化即重新解析。
+- **剩余未实现**：
+  - `set_cc`（SFZ 内显式赋值 CC 值）——当前 CC 状态由播放引擎 `setCC` / 工程 `controllerEvents` 驱动。
+  - `trigger=first` 完整语义（单声部独占；当前解析接受该值但按普通 attack 区域处理）。
+  - `group`/`off_by` 复音抢夺（voice stealing）等其余 v1/v2 opcode。
 
 ## SFZ 已实现功能手动测试清单（A–F 及后续新功能，均尚未手动验证）
+
+> 完整可执行的手动测试方案见 [SFZ-MANUAL-TEST.md](SFZ-MANUAL-TEST.md)（含用例步骤与预期、附录 C 与本清单的映射）；下表为功能点回顾。
 
 > 以下均为**真实音源试听**层面的手动验证；自动化单测已覆盖解析器/选择器逻辑，但不验证实际听感。建议各造一个最小测试 SFZ（一个 `<region>` + 一个短 WAV 采样）验证，验证后即删。
 
