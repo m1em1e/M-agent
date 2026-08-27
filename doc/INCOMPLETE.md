@@ -31,6 +31,7 @@
 - **迁移健壮性**：`setSystemInstrumentPath(migrate=true)` 跨设备复制中途失败会留半迁移状态；可先复制、校验成功后删旧目录，失败回滚清理。
 - **真实音源文件解析未纳入自动测试**（本机无测试音源文件）；可增加小型样本与损坏文件用例。
 - 可选：系统级条目「带二次确认的删除文件」入口（当前移除=仅禁用）。
+- **SFZ 属性编辑器**：当前 SFZ 音色属性只能在外部改 `.sfz` 文本后重扫，应用内无编辑入口；计划在 设置 → 音源 的 SFZ 条目提供「编辑采样区域」面板——基于 `SfzRegion` 契约（`src/shared/instrument.ts`）表格化编辑区域属性（键区/力度区、包络、滤波、分组、keyswitch、LFO、CC、v2 合成等），回写同目录 `.sfz` 文本（或另存副本）并触发「扫描音源库」重新解析生效；需先确认回写/保存策略（幂等、保留注释、损坏保护）与工程快照 `ProjectInstrument.sfzRegions` 的刷新关系。
 
 ### 数据契约、安全与编辑器
 - 严格限制 `Revision.source` 与 `AgentSession.mode` 枚举值；明确空 `tempoMap` / `timeSignatures` 规范化策略；限制工程标题长度并清理 Windows 非法字符。
