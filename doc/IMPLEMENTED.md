@@ -124,9 +124,12 @@
   添加页 dropzone 绑定即生效；保存时按轨道引用自动快照（`buildProjectInstruments`，按 id 去重，工程级优先）。
 - **SoundFont**：`spessasynth_core` 解析 SF2/SF3（bank/program/preset）；渲染进程 `WorkletSynthesizer`
   按库 → (bank, program) 路由发声（`src/renderer/audio/soundfont-engine.ts`）。
-- **SFZ**：`src/core/audio/sfz-parser.ts` 纯文本解析（`<global>/<group>/<region>/<control>` 继承、注释、引号路径，
-  opcode：sample/key/lokey/hikey/lovel/hivel/pitch_keycenter/tuning/volume/pan/loop*/amp_env_*）；
-  `selectSfzRegions` 按音符与力度选区域（支持力度分层叠加）；采样走 Chromium `decodeAudioData`（WAV/FLAC/OGG）。
+- **SFZ**：`src/core/audio/sfz-parser.ts` 纯文本解析（`<global>/<group>/<region>/<control>` 继承、注释、引号路径、
+  `<include>`/`#include` 递归加载；opcode 覆盖清单见 [INCOMPLETE.md](INCOMPLETE.md)「SFZ 简化边界」）；
+  `selectSfzRegions`/`pickSfzRegions` 按音符/力度/keyswitch/seq/random/trigger 选区域，
+  `pickSfzRegionsWithGain` 支持键/力度/CC 交叉淡化；引擎 `src/renderer/audio/sfz-engine.ts` 实现
+  noteOn/noteOff 延音、ADSR、滤波器与滤波包络、LFO/pitch 包络、CC 调制（含 CC64 踏板延音）与 v2 `oscillator`/`playback_rate`；
+  采样走 Chromium `decodeAudioData`（WAV/FLAC/OGG），按需懒解码。
 - **界面**：设置 → 音源 =「列表 / 新建音源库」两视图；列表含系统级条目（启用/禁用）、工程绑定条目（「工程」标记 + 移除绑定）、
   「扫描音源库」、右上角「添加」；空列表提供「下载推荐音源！」流式下载 GeneralUser GS（约 32MB）到系统目录；
   启动时两级音源均为空且未关闭时显示顶部黄色可关闭警告；轨道检查器提供音量滑块 + 音色选择（系统级 + 工程级合并）。
