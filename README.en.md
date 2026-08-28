@@ -2,7 +2,7 @@
 
 # 🎹 M Agent
 
-![Version](https://img.shields.io/badge/version-0.4.0-2b8a3e)
+![Version](https://img.shields.io/badge/version-0.6.0-2b8a3e)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4a9eda)
 
 ![Electron](https://img.shields.io/badge/Electron-43-47848f)

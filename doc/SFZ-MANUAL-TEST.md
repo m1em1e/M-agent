@@ -1,6 +1,6 @@
 # SFZ 功能手动测试方案
 
-> 适用版本：M Agent 0.4.0（Windows 开发态）。面向真实音源试听与端到端链路的**手动**验证；
+> 适用版本：M Agent 0.6.0（Windows 开发态）。面向真实音源试听与端到端链路的**手动**验证；
 > 解析器/选择器逻辑已有单测覆盖（`tests/audio/sfz-parser.test.ts`、`tests/main/soundfont-parser.test.ts` 等），
 > 本方案不重复其断言，只补「听感与整链路」。
 > 功能声明依据：`doc/IMPLEMENTED.md` 第 6 / 10 / 11 节、「SFZ v1/v2 覆盖情况」见 `doc/INCOMPLETE.md`。
@@ -19,7 +19,8 @@
 - 发声引擎（`src/renderer/audio/sfz-engine.ts`）：键区/力度分层、延音 noteOn/noteOff、
   ADSR、滤波器与滤波包络、LFO/pitch 包络、keyswitch、seq/random/trigger、
   键/力度/CC 交叉淡化、CC 调制（含 CC64 踏板延音）、v2 `oscillator`/`playback_rate`；
-- CC64 踏板 lane UI 编辑、SMF `0xb0` 往返、轨级 `controllerEvents`；
+- 轨级 `controllerEvents`/`pitchBends`：MIDI `0xb0`/`0xE0` 往返、导入导出兼容（无 UI 入口）；
+- 音符级 MIDI 属性：「MIDI 属性」浮动面板（菜单栏 MIDI → MIDI 属性…）编辑选中音符的 力度/声像/释放/截止/共振/微调/延音拍数；
 - 导出：SFZ 轨道离线渲染、SFZ+SoundFont+振荡器混排、mute/solo、循环区导出。
 
 不在范围（仅验证不崩溃、行为与文档一致）：`set_cc`、`trigger=first` 完整语义、
@@ -111,6 +112,13 @@
 | CC-5 | `on_cc64=127` 区域；`on_cc` 区域 | 仅 CC64=127 时可选；CC 值变化到目标值时短促发声一次 |
 | CC-6 | `xfin_ccN=0 xfout_ccN=100` CC 淡化 | CC 从 0→100 变化时音量线性渐入（可用 CC-3 的踏板事件驱动） |
 | CC-7 | `cc1_pitch=200`、`cc2_cutoff=500`、`cc3_pan=-50`、`cc64_amp=80` | 对应 CC 变化产生音高/滤波/声像/音量调制；CC=64 中值无偏移 |
+| CC-8 | 「MIDI 属性」面板（菜单 MIDI → MIDI 属性…）选中音符 → PAN 滑杆 -100..100 → 播放/试听 | SFZ 轨声像随音符 pan 变化（覆盖 region）；SoundFont 轨每通道链生效（重叠音符后音覆盖） |
+| CC-9 | CUTOFF 滑杆（对数 0=关 → 200Hz..20kHz） | SFZ 轨立即起 lowpass 听感（无需 .sfz 有滤波器）；SoundFont 轨每通道链生效 |
+| CC-10 | RESONANCE 滑杆（0.5..16.5） | SFZ / SoundFont 轨共振随值增强（配合 CUTOFF） |
+| CC-11 | REL 滑杆（0..2s） | SFZ 轨 noteOff 尾音随值变长；SoundFont 轨仅导出（库无 CC72） |
+| CC-12 | PB 滑杆（-100..100 音分） | SFZ 轨音高随微调偏移（+100 音分 ≈ +1 半音的 50%）；SoundFont 轨仅导出（库无弯音 API） |
+| CC-13 | HOLD 滑杆（0..8 拍）→ 播放 | 音符释放延后 N 拍（默认 0=踩 0 拍）；导出 MIDI 写 CC64 127/0 对，再导入还原为轨级 CC64 事件 |
+| CC-14 | 保存 `.magent` 重开；导出 MIDI 再导入 | 音符属性随 `.magent` 保留；导出为 CC10/71/74/72、0xE0、CC64 近似事件（导入后为轨级近似，per-note 不可逆向） |
 
 ### 3.5 EX 导出
 
