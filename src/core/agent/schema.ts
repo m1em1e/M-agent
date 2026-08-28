@@ -54,6 +54,11 @@ function integerInRange(value: unknown, min: number, max: number): boolean {
   return Number.isInteger(value) && Number(value) >= min && Number(value) <= max;
 }
 
+/** 有限数值范围（音符级可选属性的边界，允许小数）。 */
+function numberInRange(value: unknown, min: number, max: number): boolean {
+  return finiteNumber(value) && Number(value) >= min && Number(value) <= max;
+}
+
 /** 校验音色引用的结构（soundfont 需 libraryId/bank/program；sfz 需 libraryId）。 */
 function isInstrumentReferenceLike(value: unknown): boolean {
   if (!isRecord(value)) return false;
@@ -93,12 +98,91 @@ function validateNote(
   if (!integerInRange(value.velocity, 1, 127)) {
     issues.push({ path: `${path}.velocity`, message: "must be an integer from 1 to 127" });
   }
+  if (value.pan !== undefined && !numberInRange(value.pan, -100, 100)) {
+    issues.push({ path: `${path}.pan`, message: "must be a number from -100 to 100" });
+  }
+  if (value.release !== undefined && !numberInRange(value.release, 0, 2)) {
+    issues.push({ path: `${path}.release`, message: "must be a number from 0 to 2" });
+  }
+  if (value.cutoffHz !== undefined && !numberInRange(value.cutoffHz, 0, 20_000)) {
+    issues.push({ path: `${path}.cutoffHz`, message: "must be a number from 0 to 20000" });
+  }
+  if (value.resonanceQ !== undefined && !numberInRange(value.resonanceQ, 0, 16.5)) {
+    issues.push({ path: `${path}.resonanceQ`, message: "must be a number from 0 to 16.5" });
+  }
+  if (value.finePitchCents !== undefined && !numberInRange(value.finePitchCents, -100, 100)) {
+    issues.push({ path: `${path}.finePitchCents`, message: "must be a number from -100 to 100" });
+  }
+  if (value.sustainBeats !== undefined && !numberInRange(value.sustainBeats, 0, 8)) {
+    issues.push({ path: `${path}.sustainBeats`, message: "must be a number from 0 to 8" });
+  }
 }
 
 function validateTrackId(operation: Record<string, unknown>, path: string, issues: SchemaIssue[]): void {
   if (!nonEmptyString(operation.trackId)) {
     issues.push({ path: `${path}.trackId`, message: "must be a non-empty string" });
   }
+}
+
+/** 轨级 CC 事件数组（controllerEvents）：id 可选，tick 非负、controller/value 0–127，长度 ≤ 4000。 */
+function validateControllerEventsLike(value: unknown, path: string, issues: SchemaIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be an array" });
+    return;
+  }
+  if (value.length > 4000) {
+    issues.push({ path, message: "must have at most 4000 events" });
+    return;
+  }
+  value.forEach((event, eventIndex) => {
+    const eventPath = `${path}[${eventIndex}]`;
+    if (!isRecord(event)) {
+      issues.push({ path: eventPath, message: "must be an object" });
+      return;
+    }
+    if (event.id !== undefined && !nonEmptyString(event.id)) {
+      issues.push({ path: `${eventPath}.id`, message: "must be a non-empty string" });
+    }
+    if (!integerInRange(event.tick, 0, Number.MAX_SAFE_INTEGER)) {
+      issues.push({ path: `${eventPath}.tick`, message: "must be a non-negative integer" });
+    }
+    if (!integerInRange(event.controller, 0, 127)) {
+      issues.push({ path: `${eventPath}.controller`, message: "must be an integer from 0 to 127" });
+    }
+    if (!integerInRange(event.value, 0, 127)) {
+      issues.push({ path: `${eventPath}.value`, message: "must be an integer from 0 to 127" });
+    }
+  });
+}
+
+/** 轨级弯音事件数组（pitchBends，0xE0）：id 可选，tick 非负、value -8192..8191，长度 ≤ 4000。 */
+function validatePitchBendsLike(value: unknown, path: string, issues: SchemaIssue[]): void {
+  if (value === undefined || value === null) return;
+  if (!Array.isArray(value)) {
+    issues.push({ path, message: "must be an array" });
+    return;
+  }
+  if (value.length > 4000) {
+    issues.push({ path, message: "must have at most 4000 events" });
+    return;
+  }
+  value.forEach((event, eventIndex) => {
+    const eventPath = `${path}[${eventIndex}]`;
+    if (!isRecord(event)) {
+      issues.push({ path: eventPath, message: "must be an object" });
+      return;
+    }
+    if (event.id !== undefined && !nonEmptyString(event.id)) {
+      issues.push({ path: `${eventPath}.id`, message: "must be a non-empty string" });
+    }
+    if (!integerInRange(event.tick, 0, Number.MAX_SAFE_INTEGER)) {
+      issues.push({ path: `${eventPath}.tick`, message: "must be a non-negative integer" });
+    }
+    if (!integerInRange(event.value, -8192, 8191)) {
+      issues.push({ path: `${eventPath}.value`, message: "must be an integer from -8192 to 8191" });
+    }
+  });
 }
 
 function validateOperation(value: unknown, index: number, issues: SchemaIssue[]): void {
@@ -195,6 +279,8 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
       if (value.track.instrument !== undefined && value.track.instrument !== null && !isInstrumentReferenceLike(value.track.instrument)) {
         issues.push({ path: `${path}.track.instrument`, message: "must be a valid instrument reference or null" });
       }
+      validateControllerEventsLike(value.track.controllerEvents, `${path}.track.controllerEvents`, issues);
+      validatePitchBendsLike(value.track.pitchBends, `${path}.track.pitchBends`, issues);
       if (value.track.notes !== undefined) {
         if (!Array.isArray(value.track.notes)) {
           issues.push({ path: `${path}.track.notes`, message: "must be an array" });
@@ -219,7 +305,7 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
         break;
       }
       const changes = value.changes;
-      const allowed = ["name", "role", "channel", "program", "muted", "solo", "instrument"];
+      const allowed = ["name", "role", "channel", "program", "muted", "solo", "instrument", "controllerEvents", "pitchBends"];
       if (!allowed.some((key) => changes[key] !== undefined)) {
         issues.push({ path: `${path}.changes`, message: "must update at least one track property" });
       }
@@ -244,6 +330,8 @@ function validateOperation(value: unknown, index: number, issues: SchemaIssue[])
       if (changes.instrument !== undefined && changes.instrument !== null && !isInstrumentReferenceLike(changes.instrument)) {
         issues.push({ path: `${path}.changes.instrument`, message: "must be a valid instrument reference or null" });
       }
+      validateControllerEventsLike(changes.controllerEvents, `${path}.changes.controllerEvents`, issues);
+      validatePitchBendsLike(changes.pitchBends, `${path}.changes.pitchBends`, issues);
       break;
     }
     case "set_tempo": {

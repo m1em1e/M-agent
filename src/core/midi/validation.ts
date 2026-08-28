@@ -27,6 +27,12 @@ export function validateNote(note: MidiNote, path = "note"): ValidationIssue[] {
     "INVALID_DURATION",
   );
   integerRange(issues, note.velocity, 1, 127, `${path}.velocity`, "INVALID_VELOCITY");
+  optionalNumberRange(issues, note.pan, -100, 100, `${path}.pan`, "INVALID_NOTE_PAN");
+  optionalNumberRange(issues, note.release, 0, 2, `${path}.release`, "INVALID_NOTE_RELEASE");
+  optionalNumberRange(issues, note.cutoffHz, 0, 20_000, `${path}.cutoffHz`, "INVALID_NOTE_CUTOFF");
+  optionalNumberRange(issues, note.resonanceQ, 0, 16.5, `${path}.resonanceQ`, "INVALID_NOTE_RESONANCE");
+  optionalNumberRange(issues, note.finePitchCents, -100, 100, `${path}.finePitchCents`, "INVALID_NOTE_FINE_PITCH");
+  optionalNumberRange(issues, note.sustainBeats, 0, 8, `${path}.sustainBeats`, "INVALID_NOTE_SUSTAIN");
   if (typeof note.id !== "string" || note.id.length === 0) {
     issues.push(error("INVALID_NOTE_ID", "Note ID must be a non-empty string.", `${path}.id`));
   }
@@ -81,6 +87,19 @@ export function validateTrack(track: MidiTrack, path = "track"): ValidationIssue
     integerRange(issues, event.tick, 0, Number.MAX_SAFE_INTEGER, `${eventPath}.tick`, "INVALID_CC_TICK");
     integerRange(issues, event.controller, 0, 127, `${eventPath}.controller`, "INVALID_CC_CONTROLLER");
     integerRange(issues, event.value, 0, 127, `${eventPath}.value`, "INVALID_CC_VALUE");
+  });
+  const pitchBendIds = new Set<string>();
+  (track.pitchBends ?? []).forEach((event, index) => {
+    const eventPath = `${path}.pitchBends[${index}]`;
+    if (typeof event.id !== "string" || event.id.trim().length === 0) {
+      issues.push(error("INVALID_PITCH_BEND_ID", "Pitch bend event ID must not be empty.", `${eventPath}.id`));
+    }
+    if (pitchBendIds.has(event.id)) {
+      issues.push(error("DUPLICATE_PITCH_BEND_ID", `Duplicate pitch bend event ID '${event.id}'.`, `${eventPath}.id`));
+    }
+    pitchBendIds.add(event.id);
+    integerRange(issues, event.tick, 0, Number.MAX_SAFE_INTEGER, `${eventPath}.tick`, "INVALID_PITCH_BEND_TICK");
+    integerRange(issues, event.value, -8192, 8191, `${eventPath}.value`, "INVALID_PITCH_BEND_VALUE");
   });
   return issues;
 }
@@ -149,5 +168,20 @@ function integerRange(
 ): void {
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
     issues.push(error(code, `${path} must be an integer between ${minimum} and ${maximum}.`, path));
+  }
+}
+
+/** 可选数值字段的范围校验（未定义时跳过；需为有限数字）。 */
+function optionalNumberRange(
+  issues: ValidationIssue[],
+  value: number | undefined,
+  minimum: number,
+  maximum: number,
+  path: string,
+  code: string,
+): void {
+  if (value === undefined) return;
+  if (!Number.isFinite(value) || value < minimum || value > maximum) {
+    issues.push(error(code, `${path} must be a number between ${minimum} and ${maximum}.`, path));
   }
 }

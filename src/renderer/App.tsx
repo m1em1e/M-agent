@@ -30,6 +30,7 @@ import type { SkillTraceEntry } from "../core/agent/skills/types";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu";
 import { hitLoopBand, LOOP_HANDLE_HEIGHT, loopRangeFromDrag, resizedLoopEnd, resizedLoopStart, shiftedLoopRange } from "./loop-ruler";
 import { AudioEngine } from "./audio/audio-engine";
+import { MidiPropertiesPanel } from "./midi-properties-panel";
 import { MarkdownContent } from "./markdown";
 import {
   SUBSCRIPTION_API_TYPES,
@@ -108,12 +109,24 @@ interface MidiNote {
   startTick: number;
   durationTicks: number;
   velocity: number;
+  pan?: number;
+  release?: number;
+  cutoffHz?: number;
+  resonanceQ?: number;
+  finePitchCents?: number;
+  sustainBeats?: number;
 }
 
 interface ControllerEvent {
   id: string;
   tick: number;
   controller: number;
+  value: number;
+}
+
+interface PitchBendEvent {
+  id: string;
+  tick: number;
   value: number;
 }
 
@@ -130,6 +143,7 @@ interface MidiTrack {
   instrument?: InstrumentReference;
   loopRegion?: TickRange | null;
   controllerEvents?: ControllerEvent[];
+  pitchBends?: PitchBendEvent[];
   notes: MidiNote[];
 }
 
@@ -181,6 +195,9 @@ interface LoopDragState {
   trackId: string;
   base: MidiTrack[];
 }
+
+/** 音符级 MIDI 属性在浮动面板中的可编辑键（力度 + 六个音符属性）。 */
+type NoteAttributeKey = "velocity" | "pan" | "release" | "cutoffHz" | "resonanceQ" | "finePitchCents" | "sustainBeats";
 
 type DragState = NoteDragState | LoopDragState;
 
@@ -252,9 +269,8 @@ function normalizeTimeSignatureNumerator(numerator: number, denominator: number)
 const KEY_WIDTH = 68;
 const RULER_HEIGHT = 30;
 /** CC64 延音踏板 lane 高度（标尺下方、音符区顶部）。 */
-const CC_LANE_HEIGHT = 14;
-/** 音符区起点（标尺 + CC64 lane 之下）。 */
-const NOTES_TOP = RULER_HEIGHT + CC_LANE_HEIGHT;
+/** 音符区起点（标尺之下；参数 lane 已移除，音符区直接从标尺下方开始）。 */
+const NOTES_TOP = RULER_HEIGHT;
 const CANVAS_HEIGHT = NOTES_TOP + (MAX_PITCH - MIN_PITCH + 1) * ROW_HEIGHT;
 const TRACK_COLORS = ["#ff9d78", "#b9e66c", "#73c8ff", "#c7a5ff", "#f4d66d", "#ff79a9"];
 
@@ -268,6 +284,25 @@ const noteName = (pitch: number) => {
   const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
   return `${names[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
 };
+
+/** 把候选里的轨级 CC 事件规范化为本地事件（忽略模型给的 id，应用层生成，按 tick 排序）。 */
+const normalizeCcEvents = (events: Array<{ id?: string; tick: number; controller: number; value: number }>): ControllerEvent[] =>
+  events.map((event) => ({ id: uid("cc"), tick: event.tick, controller: event.controller, value: event.value }))
+    .sort((a, b) => a.tick - b.tick || a.controller - b.controller);
+
+/** MidiNote 可选字段 → 引擎音符级参数（未设置的键不出现）。 */
+const noteAudioParams = (note: MidiNote): { pan?: number; releaseSeconds?: number; cutoffHz?: number; resonanceQ?: number; finePitchCents?: number } => ({
+  ...(note.pan !== undefined ? { pan: note.pan } : {}),
+  ...(note.release !== undefined ? { releaseSeconds: note.release } : {}),
+  ...(note.cutoffHz !== undefined ? { cutoffHz: note.cutoffHz } : {}),
+  ...(note.resonanceQ !== undefined ? { resonanceQ: note.resonanceQ } : {}),
+  ...(note.finePitchCents !== undefined ? { finePitchCents: note.finePitchCents } : {}),
+});
+
+/** 把候选里的轨级弯音事件规范化为本地事件（忽略模型给的 id，应用层生成，按 tick 排序）。 */
+const normalizePitchBends = (events: Array<{ id?: string; tick: number; value: number }>): PitchBendEvent[] =>
+  events.map((event) => ({ id: uid("pb"), tick: event.tick, value: event.value }))
+    .sort((a, b) => a.tick - b.tick);
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error && error.message.trim()
   ? `${fallback}：${error.message}`
   : fallback;
@@ -450,6 +485,8 @@ const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.ma
   volume: track.volume ?? 1,
   instrument: track.instrument,
   loopRegion: track.loopRegion,
+  controllerEvents: track.controllerEvents?.map((event) => ({ ...event })),
+  pitchBends: track.pitchBends?.map((event) => ({ ...event })),
   notes: track.notes.map((note) => ({ ...note })),
 }));
 
@@ -589,6 +626,15 @@ function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet):
           delete changes.instrument;
           track.instrument = undefined;
         }
+        // controllerEvents / pitchBends：提供即替换整轨事件数组（null/[] = 清空），id 由应用层生成。
+        if (changes.controllerEvents !== undefined) {
+          track.controllerEvents = changes.controllerEvents === null ? [] : normalizeCcEvents(changes.controllerEvents);
+          delete changes.controllerEvents;
+        }
+        if (changes.pitchBends !== undefined) {
+          track.pitchBends = changes.pitchBends === null ? [] : normalizePitchBends(changes.pitchBends);
+          delete changes.pitchBends;
+        }
         Object.assign(track, changes);
         break;
       }
@@ -611,12 +657,11 @@ function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet):
           volume: input.volume,
           instrument: input.instrument ?? undefined,
           loopRegion: input.loopRegion,
+          controllerEvents: input.controllerEvents === undefined ? undefined : normalizeCcEvents(input.controllerEvents),
+          pitchBends: input.pitchBends === undefined ? undefined : normalizePitchBends(input.pitchBends),
           notes: (input.notes ?? []).map((note) => ({
+            ...note,
             id: note.id ?? uid("agent-note"),
-            pitch: note.pitch,
-            startTick: note.startTick,
-            durationTicks: note.durationTicks,
-            velocity: note.velocity,
           })),
         });
         break;
@@ -779,10 +824,17 @@ interface AppProps {
 
 export default function App({ initialAppearance, themePresets }: AppProps) {
   const [projectTitle, setProjectTitle] = useState("Ruins After Rain");
-  useEffect(() => { document.title = `${projectTitle} · M Agent`; }, [projectTitle]);
   const [projectPpq, setProjectPpq] = useState(PPQ);
   const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
   const [projectFilePath, setProjectFilePath] = useState("");
+  // 窗口标题 = 【项目名称】 - M Agent：真实标题优先；空/Untitled 时回退文件名（去 .magent 扩展名）。
+  useEffect(() => {
+    const trimmed = projectTitle.trim();
+    const fileBase = projectFilePath.split(/[\\/]/).pop() ?? "";
+    const base = fileBase.replace(/\.magent$/i, "");
+    const display = trimmed && trimmed !== "Untitled" ? trimmed : (base || trimmed || "Untitled");
+    document.title = `${display} - M Agent`;
+  }, [projectFilePath, projectTitle]);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [windowChoice, setWindowChoice] = useState<ProjectOpenIntent | null>(null);
   const [missingProject, setMissingProject] = useState<{ path: string } | null>(null);
@@ -825,6 +877,8 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
   const menuBarRef = useRef<HTMLDivElement>(null);
   const timeSigRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 「MIDI 属性」浮动面板：开关与位置（右缘由拖动更新，位置记忆存储在 localStorage）。 */
+  const [midiPanel, setMidiPanel] = useState<{ open: boolean; x: number; y: number }>({ open: false, x: 12, y: 120 });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [appearance, setAppearance] = useState<AppearancePreferences>(initialAppearance);
   const [conversationSettings, setConversationSettings] = useState<ConversationSettings>(loadConversationSettings);
@@ -1252,6 +1306,79 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     if (!preserveCandidates) setCandidates([]);
   }, [projectPpq]);
 
+  // ----「MIDI 属性」浮动面板：音符级属性编辑器（力度 + pan/release/cutoff/resonance/finePitch/sustainBeats）----
+  /** 面板编辑的基线快照（指针按下捕获，指针抬起提交，保证一次撤销还原）。 */
+  const midiEditBaseRef = useRef<EditorSnapshot | null>(null);
+  const startMidiPanelEdit = useCallback(() => {
+    midiEditBaseRef.current = cloneSnapshot(editorStateRef.current);
+  }, []);
+  const commitMidiPanelEdit = useCallback(() => {
+    const base = midiEditBaseRef.current;
+    midiEditBaseRef.current = null;
+    if (!base) return;
+    setPast((history) => [...history.slice(-39), base]);
+    setFuture([]);
+    setCandidates([]);
+  }, []);
+  /** 更新选中音符的某个 MIDI 属性（持续调用；撤销由 start/commit 配对）。 */
+  const upsertMidiNoteAttr = useCallback((key: NoteAttributeKey, value: number) => {
+    if (!selectedNoteId) return;
+    setTracks((current) => current.map((track) => ({
+      ...track,
+      notes: track.notes.map((note) => note.id === selectedNoteId ? { ...note, [key]: value } : note),
+    })));
+  }, [selectedNoteId]);
+  const toggleMidiPanel = useCallback(() => {
+    setMidiPanel((current) => {
+      if (current.open) return { ...current, open: false };
+      let x = 12;
+      let y = 120;
+      try {
+        const saved = JSON.parse(localStorage.getItem("magent.midi-panel-pos") ?? "null") as { x?: number; y?: number } | null;
+        if (saved && typeof saved.x === "number" && Number.isFinite(saved.x)) x = saved.x;
+        if (saved && typeof saved.y === "number" && Number.isFinite(saved.y)) y = saved.y;
+      } catch { /* 存档损坏时用默认位置。 */ }
+      return { open: true, x: Math.max(8, Math.min(x, window.innerWidth - 300)), y: Math.max(8, Math.min(y, window.innerHeight - 200)) };
+    });
+  }, []);
+  const midiPanelDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const startMidiPanelDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    midiPanelDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: midiPanel.x,
+      originY: midiPanel.y,
+    };
+  }, [midiPanel.x, midiPanel.y]);
+  // 拖动跟随 + 松手持久化位置（window 级监听，无需指针捕获）。
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = midiPanelDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      setMidiPanel((current) => ({
+        ...current,
+        x: clamp(drag.originX + (event.clientX - drag.startX), 8, window.innerWidth - 300),
+        y: clamp(drag.originY + (event.clientY - drag.startY), 8, window.innerHeight - 200),
+      }));
+    };
+    const onUp = (event: PointerEvent) => {
+      const drag = midiPanelDragRef.current;
+      if (!drag || event.pointerId !== drag.pointerId) return;
+      midiPanelDragRef.current = null;
+      try {
+        localStorage.setItem("magent.midi-panel-pos", JSON.stringify({ x: midiPanel.x, y: midiPanel.y }));
+      } catch { /* 忽略存储异常。 */ }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [midiPanel.x, midiPanel.y]);
+
   const undo = useCallback(() => {
     setCandidates([]);
     setPast((history) => {
@@ -1493,39 +1620,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       context.fillStyle = "rgba(255,255,255,.03)";
       context.fillRect(bgX, NOTES_TOP, bgW, CANVAS_HEIGHT - NOTES_TOP);
     }
-    // CC64 延音踏板 lane：显示选中轨道的踏板区间（值 > 63 的区间高亮）。
-    const laneTop = RULER_HEIGHT;
-    const selectedTrackForLane = tracks.find((track) => track.id === selectedTrackId);
-    context.fillStyle = "rgba(255,255,255,.02)";
-    context.fillRect(KEY_WIDTH, laneTop, canvasWidth - KEY_WIDTH, CC_LANE_HEIGHT);
-    context.strokeStyle = "rgba(255,255,255,.06)";
-    context.beginPath();
-    context.moveTo(KEY_WIDTH, NOTES_TOP + 0.5);
-    context.lineTo(canvasWidth, NOTES_TOP + 0.5);
-    context.stroke();
-    if (selectedTrackForLane) {
-      const ccEvents = (selectedTrackForLane.controllerEvents ?? [])
-        .filter((event) => event.controller === 64)
-        .sort((a, b) => a.tick - b.tick);
-      let holdStart: number | null = null;
-      const flush = (endTick: number) => {
-        if (holdStart === null) return;
-        const sx = KEY_WIDTH + (holdStart / projectPpq) * beatWidth;
-        const sw = Math.max(2, ((endTick - holdStart) / projectPpq) * beatWidth);
-        context.fillStyle = "rgba(255,217,102,.4)";
-        context.fillRect(sx, laneTop + 1, sw, CC_LANE_HEIGHT - 2);
-        holdStart = null;
-      };
-      for (const event of ccEvents) {
-        if (event.value > 63 && holdStart === null) holdStart = event.tick;
-        else if (event.value <= 63 && holdStart !== null) flush(event.tick);
-      }
-      if (holdStart !== null) flush(barCount * BEATS_PER_BAR * projectPpq);
-      context.fillStyle = "rgba(141,146,144,.7)";
-      context.font = "9px ui-monospace, monospace";
-      context.textBaseline = "middle";
-      context.fillText("PEDAL", KEY_WIDTH + 4, laneTop + CC_LANE_HEIGHT / 2 + 0.5);
-    }
+    // 参数 lane 已移除：音符属性统一在「MIDI 属性」浮动面板（音符级）编辑。
     for (const track of tracks) {
       const active = track.id === selectedTrackId;
       const audible = !track.muted && (!soloActive || track.solo);
@@ -1868,12 +1963,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     };
   }, [findInstrumentEntry, getAudioEngine, magent]);
 
-  /** 试听音符：noteOn 后按音符时长延时释放（延音到音符结束）。 */
+  /** 试听音符：noteOn 后按音符时长 + 延音拍延时释放（延音=踏板 N 拍）。 */
   const playTrackNote = useCallback(async (track: MidiTrack, note: MidiNote, durationMs: number) => {
     const engine = getAudioEngine();
     if (!engine) return;
     try {
       const ref = await resolveTrackInstrument(track);
+      const sustainMs = (note.sustainBeats ?? 0) > 0 ? ((note.sustainBeats ?? 0) * 60000) / tempo : 0;
       await engine.noteOn({
         channel: track.channel,
         note: note.pitch,
@@ -1881,14 +1977,15 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         volume: track.volume ?? 1,
         soundFont: ref.soundFont,
         sfz: ref.sfz,
+        params: noteAudioParams(note),
       });
       if (durationMs > 0) {
-        window.setTimeout(() => engine.noteOff(track.channel, note.pitch), durationMs);
+        window.setTimeout(() => engine.noteOff(track.channel, note.pitch), durationMs + sustainMs);
       }
     } catch {
       // Audition is optional; editing remains available when audio is unavailable.
     }
-  }, [getAudioEngine, resolveTrackInstrument]);
+  }, [getAudioEngine, resolveTrackInstrument, tempo]);
 
   /** 在周期（循环区长度或整曲长度）内，返回 anchor 之后的最近触发 tick。 */
   const nextCycleTick = useCallback((anchor: number, previousTick: number, period: number): number => {
@@ -1915,7 +2012,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         const period = loop ? loop.endTick - loop.startTick : maxTick;
         for (const note of track.notes) {
           if (loop && (note.startTick < loop.startTick || note.startTick >= loop.endTick)) continue;
-          // 音符开始：进入 → noteOn（保持延音，直到结束 tick 才 noteOff）。
+          // 音符开始：进入 → noteOn（保持延音，直到结束 tick + 延音拍才 noteOff）。
           const onTick = nextCycleTick(note.startTick, previous, period);
           if (onTick > previous && onTick <= tick) {
             void (async () => {
@@ -1930,6 +2027,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
                   volume: track.volume ?? 1,
                   soundFont: ref.soundFont,
                   sfz: ref.sfz,
+                  params: noteAudioParams(note),
                 });
               } catch {
                 // 播放可选；音频不可用时编辑仍可用。
@@ -1937,7 +2035,9 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             })();
           }
           // 音符结束：退出 → noteOff（统一释放 SoundFont / SFZ / 振荡器）。
-          const offTick = nextCycleTick(note.startTick + note.durationTicks, previous, period);
+          // 延音（sustainBeats 拍）→ noteOff 延后 equivalent 拍（≈ 踏板踩住 N 拍）。
+          const sustainTicks = Math.round((note.sustainBeats ?? 0) * projectPpq);
+          const offTick = nextCycleTick(note.startTick + note.durationTicks + sustainTicks, previous, period);
           if (offTick > previous && offTick <= tick) {
             getAudioEngine()?.noteOff(track.channel, note.pitch);
           }
@@ -1947,6 +2047,13 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           const ccTick = nextCycleTick(ccEvent.tick, previous, period);
           if (ccTick > previous && ccTick <= tick) {
             getAudioEngine()?.setCC(track.channel, ccEvent.controller, ccEvent.value);
+          }
+        }
+        // 弯音事件（0xE0）：到 tick 时触发 setPitchBend（SFZ 引擎生效；SoundFont 无弯音 API）。
+        for (const pbEvent of track.pitchBends ?? []) {
+          const pbTick = nextCycleTick(pbEvent.tick, previous, period);
+          if (pbTick > previous && pbTick <= tick) {
+            getAudioEngine()?.setPitchBend(track.channel, pbEvent.value);
           }
         }
       });
@@ -2018,28 +2125,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       }
       return;
     }
-    // CC64 延音踏板 lane：点击空白添加 127（踩），点击已踩区间内添加 0（松）。
-    if (y >= RULER_HEIGHT && y < NOTES_TOP && x > KEY_WIDTH && event.button === 0 && selectedTrackId) {
-      const tick = Math.max(0, tickAtX(x));
-      const laneTrack = tracks.find((item) => item.id === selectedTrackId);
-      if (laneTrack) {
-        const cc64 = (laneTrack.controllerEvents ?? [])
-          .filter((event) => event.controller === 64)
-          .sort((a, b) => a.tick - b.tick);
-        let insideHold = false;
-        for (let i = 0; i < cc64.length; i += 1) {
-          if (cc64[i].value > 63 && tick >= cc64[i].tick) {
-            const end = cc64.slice(i + 1).find((event) => event.value <= 63)?.tick ?? barCount * BEATS_PER_BAR * projectPpq;
-            if (tick < end) { insideHold = true; break; }
-          }
-        }
-        const event: ControllerEvent = { id: uid("cc"), tick, controller: 64, value: insideHold ? 0 : 127 };
-        commitTracks(tracks.map((item) => item.id === selectedTrackId
-          ? { ...item, controllerEvents: [...(item.controllerEvents ?? []), event].sort((a, b) => a.tick - b.tick || a.controller - b.controller) }
-          : item));
-      }
-      return;
-    }
+    // 参数 lane 已移除：音符级 MIDI 属性统一在「MIDI 属性」浮动面板编辑。
     if (x <= KEY_WIDTH || y <= NOTES_TOP || !selectedTrack) return;
     const hit = noteAtPoint(x, y);
     if (hit) {
@@ -2656,6 +2742,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
     else if (action === "window-close") void magent?.closeWindow();
     else if (action === "instruments-settings") { setSettingsSection("sound"); setSettingsOpen(true); }
     else if (action === "plugins-settings") { setSettingsSection("plugins"); setSettingsOpen(true); }
+    else if (action === "midi-properties") { toggleMidiPanel(); }
     else if (action === "help-about") showToast("M Agent · 面向独立游戏开发者的桌面 MIDI 创作 Agent");
     else if (action === "help-settings") { setSettingsSection("general"); setSettingsOpen(true); }
   }, [magent, openRecentProject, requestWindowChoice, saveProjectAs, handleSaveProject, handleExport, undo, redo, refreshEnvironment, showToast]);
@@ -3452,7 +3539,6 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               <div className="note-inspector">
                 <div className="inspector-label">SELECTED NOTE</div>
                 <div className="note-data"><strong>{noteName(selectedNote.pitch)}</strong><span>VEL {selectedNote.velocity}</span></div>
-                <label><span>力度</span><input type="range" min="1" max="127" value={selectedNote.velocity} onChange={(event) => setTracks(tracks.map((track) => ({ ...track, notes: track.notes.map((note) => note.id === selectedNote.id ? { ...note, velocity: Number(event.target.value) } : note) })))} onMouseUp={(event) => updateSelectedNote({ velocity: Number((event.target as HTMLInputElement).value) })} /></label>
                 <button className="danger-text" onClick={deleteSelectedNote}><Icon name="trash" />删除音符</button>
               </div>
             ) : <p className="inspector-hint">双击空白处添加音符，拖动右边缘调整长度。</p>}
@@ -4350,6 +4436,17 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
             </div>
           </section>
         </div>
+      )}
+      {midiPanel.open && (
+        <MidiPropertiesPanel
+          note={selectedTrack?.notes.find((item) => item.id === selectedNoteId) ?? undefined}
+          position={{ x: midiPanel.x, y: midiPanel.y }}
+          onDragStart={startMidiPanelDrag}
+          onClose={() => setMidiPanel((current) => ({ ...current, open: false }))}
+          onChangeAttr={upsertMidiNoteAttr}
+          onEditStart={startMidiPanelEdit}
+          onEditCommit={commitMidiPanelEdit}
+        />
       )}
       {toast && <div className="toast"><span className="status-light online" />{toast}</div>}
     </div>

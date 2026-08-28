@@ -668,3 +668,34 @@ function parseSeconds(value: string | undefined): number | undefined {
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+
+// ---------------------------------------------------------------------------
+// 轨级 CC 默认映射与弯音（钢琴卷帘 PAN/RELEASE/CUTOFF/RESONANCE/PB lane 的引擎落点）。
+// 语义：CC lane 画的事件在播放时经引擎 setCC 生效；SFZ region 自己声明了对应
+// ccN_* 调制或静态值时以声明的为准（引擎侧判断），此处只做 CC 值 → 参数的换算。
+// ---------------------------------------------------------------------------
+
+/** CC10 → 声像偏移（-1..1，64=正中）。 */
+export function defaultPanOffsetForCc(cc: number): number {
+  return (cc - 64) / 64;
+}
+
+/** CC72 → ADSR release 秒数（CC 0..127 → 0..2s）。 */
+export function defaultReleaseSecondsForCc(cc: number): number {
+  return (cc / 127) * 2;
+}
+
+/** CC74 → 截止频率（对数映射 200Hz..20kHz）。 */
+export function defaultCutoffHzForCc(cc: number): number {
+  return 200 * Math.pow(100, cc / 127);
+}
+
+/** CC71 → 共振 Q（0.5..16.5）。 */
+export function defaultResonanceQForCc(cc: number): number {
+  return 0.5 + (cc / 127) * 16;
+}
+
+/** 弯音值（-8192..8191）→ 半音偏移（满量程 ±2 半音 = ±200 cents）。 */
+export function pitchBendSemitones(value: number): number {
+  return clamp(value / 8192, -1, 1) * 2;
+}

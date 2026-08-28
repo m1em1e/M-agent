@@ -134,3 +134,89 @@ describe("CC 事件往返（含 CC64 延音踏板）", () => {
     ]);
   });
 });
+
+describe("弯音事件往返（0xE0）", () => {
+  it("导出写 0xE0、导入还原 pitchBends", () => {
+    const source = projectFixture();
+    source.tracks[0].pitchBends = [
+      { id: "p1", tick: 240, value: 0 },
+      { id: "p2", tick: 480, value: 4096 },
+      { id: "p3", tick: 960, value: -8192 },
+      { id: "p4", tick: 1200, value: -1 },
+    ];
+    const encoded = exportMidi(source, { format: 1 });
+    const result = importMidi(encoded, { title: "pb" });
+    const melody = result.project.tracks.find((track) => track.channel === 0);
+    expect(melody?.pitchBends).toEqual([
+      expect.objectContaining({ tick: 240, value: 0 }),
+      expect.objectContaining({ tick: 480, value: 4096 }),
+      expect.objectContaining({ tick: 960, value: -8192 }),
+      expect.objectContaining({ tick: 1200, value: -1 }),
+    ]);
+  });
+
+  it("低层 0xE0 字节按 14bit 还原弯音值（data1=LSB、data2=MSB，-8192..8191）", () => {
+    const data = Uint8Array.of(
+      0x4d, 0x54, 0x68, 0x64, 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0x80,
+      0x4d, 0x54, 0x72, 0x6b, 0, 0, 0, 24,
+      0, 0xe0, 0x7f, 0x00,
+      0, 0xe0, 0x00, 0x40,
+      0, 0xe0, 0x00, 0x60,
+      0, 0x90, 0x3c, 0x64,
+      96, 0x80, 0x3c, 0x00,
+      0, 0xff, 0x2f, 0x00,
+    );
+    const result = importMidi(data, { title: "pb-bytes" });
+    const track = result.project.tracks[0];
+    expect(track.pitchBends).toEqual([
+      expect.objectContaining({ tick: 0, value: 127 - 8192 }),
+      expect.objectContaining({ tick: 0, value: 0 }),
+      expect.objectContaining({ tick: 0, value: 4096 }),
+    ]);
+  });
+});
+
+describe("音符级 MIDI 属性导出（近似 CC/弯音事件）", () => {
+  it("导出写 CC10/71/74/72、0xE0 弯音与 CC64 延音对", () => {
+    const source = projectFixture();
+    const note = source.tracks[0].notes[0];
+    note.pan = 40;
+    note.cutoffHz = 2000;
+    note.resonanceQ = 8;
+    note.release = 1;
+    note.finePitchCents = 50;
+    note.sustainBeats = 2;
+    note.durationTicks = 480;
+    const encoded = exportMidi(source, { format: 1 });
+    const result = importMidi(encoded, { title: "attrs" });
+    const melody = result.project.tracks.find((track) => track.channel === 0);
+    const ccAt = (controller: number): number[] => (melody?.controllerEvents ?? [])
+      .filter((event) => event.controller === controller)
+      .map((event) => event.value);
+    const ccTicks = (controller: number): number[] => (melody?.controllerEvents ?? [])
+      .filter((event) => event.controller === controller)
+      .map((event) => event.tick);
+    // pan 40 → (40+100)/2 = 70；cutoff 2000 → log 映射 ≈ 64；resonance 8 → 62；release 1 → 64。
+    expect(ccAt(10)).toEqual([70]);
+    expect(ccAt(74)[0]).toBeGreaterThanOrEqual(60);
+    expect(ccAt(74)[0]).toBeLessThanOrEqual(68);
+    expect(ccAt(71)).toEqual([62]);
+    expect(ccAt(72)).toEqual([64]);
+    // 延音 2 拍（ppq 480）：踩 @0、松 @480+960=1440。
+    expect(ccTicks(64)).toEqual([0, 1440]);
+    expect(ccAt(64)).toEqual([127, 0]);
+    // finePitch +50 音分 → bend = 2048。
+    expect(melody?.pitchBends).toEqual([
+      expect.objectContaining({ tick: 0, value: 2048 }),
+    ]);
+  });
+
+  it("默认属性不写出任何近似事件", () => {
+    const source = projectFixture();
+    const encoded = exportMidi(source, { format: 1 });
+    const result = importMidi(encoded, { title: "defaults" });
+    const melody = result.project.tracks.find((track) => track.channel === 0);
+    expect(melody?.controllerEvents ?? []).toEqual([]);
+    expect(melody?.pitchBends ?? []).toEqual([]);
+  });
+});

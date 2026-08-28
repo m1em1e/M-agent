@@ -94,6 +94,14 @@ export const APP_MENU_GROUPS: AppMenuGroup[] = [
     ],
   },
   {
+    key: "midi",
+    label: "MIDI",
+    accessKey: "M",
+    items: [
+      { label: "MIDI 属性…", action: "midi-properties", shortcut: "Ctrl+Shift+M", accelerator: "CmdOrCtrl+Shift+M" },
+    ],
+  },
+  {
     key: "instruments",
     label: "音源",
     accessKey: "S",

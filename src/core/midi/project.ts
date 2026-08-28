@@ -60,13 +60,17 @@ export function createMidiProject(options: CreateProjectOptions = {}): MidiProje
 }
 
 export function createMidiNote(input: NoteInput, idFactory: IdFactory = createId): MidiNote {
-  return {
+  const note: MidiNote = {
     id: input.id ?? idFactory("note"),
     pitch: input.pitch,
     startTick: input.startTick,
     durationTicks: input.durationTicks,
     velocity: input.velocity,
   };
+  for (const key of ["pan", "release", "cutoffHz", "resonanceQ", "finePitchCents", "sustainBeats"] as const) {
+    if (input[key] !== undefined) note[key] = input[key];
+  }
+  return note;
 }
 
 export function createMidiTrack(input: TrackInput, idFactory: IdFactory = createId): MidiTrack {
@@ -83,6 +87,7 @@ export function createMidiTrack(input: TrackInput, idFactory: IdFactory = create
     loopRegion: input.loopRegion,
     notes: (input.notes ?? []).map((note) => createMidiNote(note, idFactory)),
     controllerEvents: input.controllerEvents?.map((event) => ({ ...event, id: event.id ?? idFactory("cc") })),
+    pitchBends: input.pitchBends?.map((event) => ({ ...event, id: event.id ?? idFactory("pb") })),
   };
 }
 
@@ -99,6 +104,7 @@ export function cloneMidiProject(project: MidiProject): MidiProject {
         : { ...track.loopRegion },
       notes: track.notes.map((note) => ({ ...note })),
       controllerEvents: track.controllerEvents?.map((event) => ({ ...event })),
+      pitchBends: track.pitchBends?.map((event) => ({ ...event })),
     })),
     revisions: project.revisions.map((revision) => ({ ...revision })),
     agentSessions: project.agentSessions.map((session) => ({

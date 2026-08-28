@@ -1,4 +1,4 @@
-import { ccCenterOffset, nextKeyswitchState, oscillatorFrequency, pickSfzRegions, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, defaultCutoffHzForCc, defaultPanOffsetForCc, defaultReleaseSecondsForCc, defaultResonanceQForCc, nextKeyswitchState, oscillatorFrequency, pickSfzRegions, pickSfzRegionsWithGain, pitchBendSemitones, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
 /** 将 SFZ 滤波器类型映射到 Web Audio BiquadFilterType（bandreject → notch）。 */
@@ -22,12 +22,26 @@ function configureLfo(context: AudioContext, osc: OscillatorNode, shape: Oscilla
   osc.setPeriodicWave(context.createPeriodicWave(real, imag));
 }
 
+/** 音符级音频参数（MidiNote 可选字段 → 引擎覆盖；缺省=用音源/轨级默认）。 */
+export interface SfzNoteParams {
+  /** 声像 -100..100（覆盖 region.pan）。 */
+  pan?: number;
+  /** 释放尾音秒（覆盖 region.release 默认映射）。 */
+  releaseSeconds?: number;
+  /** 滤波截止 Hz（>0 视为启用 lowpass）。 */
+  cutoffHz?: number;
+  /** 共振 Q。 */
+  resonanceQ?: number;
+  /** 微调音分（叠加到音高）。 */
+  finePitchCents?: number;
+}
+
 /**
  * SFZ 采样引擎：按 libraryId 缓存采样解码，按键区/力度区命中区域发声。
  * 支持真正的 noteOn / noteOff 延音：noteOn 进入 ADSR 的 attack→decay→sustain 保持，
  * noteOff 时才进入 release；暂停/停止用 stopAll 立即切断。
  * 支持 A（delay/keytrack/pitchOffset）、B（滤波器）、C（seq 轮换/random/trigger 选择）、
- * D（keyswitch）、F（LFO 调制 / pitch 包络）。
+ * D（keyswitch）、F（LFO 调制 / pitch 包络）与音符级参数覆盖（SfzNoteParams）。
  */
 export class SfzEngine {
   private readonly libraries = new Map<string, LoadedSfzLibrary>();
@@ -39,6 +53,10 @@ export class SfzEngine {
   private readonly keyswitchStates = new Map<string, { activeKey?: number; previousKey?: number; last?: boolean }>();
   /** CC 状态：channel → controller → value。 */
   private readonly ccState = new Map<number, Map<number, number>>();
+  /** 已显式设置的 CC（`channel:controller`）——默认映射只在 lane 画过事件后生效。 */
+  private readonly ccSeen = new Set<string>();
+  /** 弯音状态：channel → value（-8192..8191，0=基准）。 */
+  private readonly pitchBendState = new Map<number, number>();
   /** CC64 踏板延音中（尚未松踏板）的音符：channel → ActiveNote[]。 */
   private readonly heldNotes = new Map<number, ActiveNote[]>();
 
@@ -55,7 +73,7 @@ export class SfzEngine {
   }
 
   /** 触发音符并保持（sustain），直到 noteOff 才释放。无命中或采样缺失时静默。 */
-  async noteOn(channel: number, note: number, velocity: number, libraryId: string): Promise<void> {
+  async noteOn(channel: number, note: number, velocity: number, libraryId: string, params?: SfzNoteParams): Promise<void> {
     const library = this.libraries.get(libraryId);
     if (!library) return;
     // D：keyswitch —— 若该 note 命中某区域 sw 区间，则更新该库的 keyswitch 状态机。
@@ -65,6 +83,9 @@ export class SfzEngine {
     // trigger 补全：同 channel 已有活动音符 → legato。
     const legato = this.hasActiveNoteOnChannel(channel);
     const getCC = (controller: number) => this.getCC(channel, controller);
+    const ccActive = (controller: number) => this.ccSeen.has(`${channel}:${controller}`);
+    const bendSemitones = pitchBendSemitones(this.pitchBendState.get(channel) ?? 0)
+      + ((params?.finePitchCents ?? 0) / 100);
     const matched = pickSfzRegionsWithGain(library.regions, note, velocity, "attack", { seqCounts: this.seqCounts }, Math.random, keyswitch, legato, getCC);
     if (matched.length === 0) return;
     const now = this.context.currentTime;
@@ -77,10 +98,13 @@ export class SfzEngine {
       } catch {
         continue;
       }
-      const item = this.startSustainedSource(region, buffer, note, velocity, now, gain, (c) => this.getCC(channel, c));
+      const item = this.startSustainedSource(region, buffer, note, velocity, now, gain, getCC, bendSemitones, ccActive, params);
       if (item) {
         items.push(item);
-        releaseSeconds = Math.max(releaseSeconds, region.release ?? 0.1);
+        // 音符级 release 优先，其次 CC72（默认映射），最后 region 声明。
+        releaseSeconds = Math.max(releaseSeconds, params?.releaseSeconds
+          ?? region.release
+          ?? (ccActive(72) ? defaultReleaseSecondsForCc(this.getCC(channel, 72)) : 0.1));
       }
     }
     if (items.length === 0) return;
@@ -130,6 +154,7 @@ export class SfzEngine {
     const previous = map.get(controller);
     const wasDown = (map.get(64) ?? 0) > 63;
     map.set(controller, value);
+    this.ccSeen.add(`${channel}:${controller}`);
     if (controller === 64 && wasDown && value <= 63) {
       const held = this.heldNotes.get(channel);
       if (held) {
@@ -139,6 +164,11 @@ export class SfzEngine {
     }
     // on_cc：CC 值变化时触发匹配区域（短促播放一次，不登记延音）。
     if (previous !== value) this.playOnCCTrigger(controller, value);
+  }
+
+  /** 设置弯音值（-8192..8191，0=基准）。对随后 noteOn 的发声生效（±2 半音满量程）。 */
+  setPitchBend(channel: number, value: number): void {
+    this.pitchBendState.set(channel, Math.max(-8192, Math.min(8191, value)));
   }
 
   /** on_cc 触发：CC 值达到 region.onccValue 时短促播放该区域。 */
@@ -188,11 +218,11 @@ export class SfzEngine {
   }
 
   /** 短促一次性播放（release 采样用）：按采样长度自然衰减，不进入延音登记。 */
-  private startShortSource(region: SfzRegion, buffer: AudioBuffer, note: number, velocity: number, now: number): void {
+  private startShortSource(region: SfzRegion, buffer: AudioBuffer, note: number, velocity: number, now: number, bendSemitones = 0): void {
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     const keytrack = region.keytrack ?? 100;
-    const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0);
+    const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0) + bendSemitones;
     source.playbackRate.value = 2 ** (semitones / 12);
     const offsetSec = region.offset !== undefined ? region.offset / buffer.sampleRate : 0;
     const endSec = region.end !== undefined ? region.end / buffer.sampleRate : buffer.duration;
@@ -228,6 +258,8 @@ export class SfzEngine {
     this.seqCounts.clear();
     this.keyswitchStates.clear();
     this.ccState.clear();
+    this.ccSeen.clear();
+    this.pitchBendState.clear();
     this.heldNotes.clear();
   }
 
@@ -245,17 +277,20 @@ export class SfzEngine {
     now: number,
     crossfadeGain = 1,
     getCC?: (controller: number) => number,
+    bendSemitones = 0,
+    ccActive?: (controller: number) => boolean,
+    params?: SfzNoteParams,
   ): ActiveSource | null {
     // A：触发延迟（供所有调度共用）。
     const startAt = now + (region.delay ?? 0);
-    // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
+    // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning、弯音一同修正音高。
     const keytrack = region.keytrack ?? 100;
     const velocityOffset = (velocity - 64) / 63;
     const ccPitchOffset = region.ccPitchN !== undefined && getCC
       ? ccCenterOffset(region.ccPitchDepth ?? 0, getCC(region.ccPitchN))
       : 0;
     const semitones = (note - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
-      + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
+      + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset + bendSemitones;
     const baseRate = 2 ** (semitones / 12);
     const playbackRate = region.playbackRate ?? 1;
 
@@ -349,18 +384,27 @@ export class SfzEngine {
     }
 
     // B：滤波器（source → BiquadFilter → gain）+ 滤波包络（fil_env 对 frequency 调度）。
+    // 音符级 cutoffHz/resonanceQ 优先；其次 CC74/CC71 默认映射；最后 region 声明。
     let chain: AudioNode = source;
     let filterEnvelope: { filter: BiquadFilterNode; baseFreq: number } | undefined;
-    if (region.filterType && region.cutoffHz) {
+    const defaultCutoff = region.ccCutoffN === undefined && ccActive?.(74)
+      ? defaultCutoffHzForCc(getCC?.(74) ?? 64)
+      : undefined;
+    const noteCutoff = params?.cutoffHz && params.cutoffHz > 0 ? params.cutoffHz : undefined;
+    const baseCutoffHz = noteCutoff ?? defaultCutoff ?? region.cutoffHz;
+    if (baseCutoffHz !== undefined && (region.filterType !== undefined || noteCutoff !== undefined)) {
       const filter = this.context.createBiquadFilter();
-      filter.type = toBiquadType(region.filterType);
-      // cutoff_veltrack：力度调制截止频率。
+      filter.type = region.filterType ? toBiquadType(region.filterType) : "lowpass";
+      // cutoff_veltrack：力度调制截止频率；ccN_cutoff：声明的 CC 调制。
       const cutoffOffset = (region.cutoffVelTrack ?? 0) * ((velocity - 64) / 63)
       + (region.ccCutoffN !== undefined && getCC ? ccCenterOffset(region.ccCutoffDepth ?? 0, getCC(region.ccCutoffN)) : 0);
-      filter.frequency.value = region.cutoffHz + cutoffOffset;
-      if (region.resonanceQ) filter.Q.value = region.resonanceQ;
+      filter.frequency.value = baseCutoffHz + cutoffOffset;
+      const effectiveQ = params?.resonanceQ
+        ?? region.resonanceQ
+        ?? (region.ccCutoffN === undefined && ccActive?.(71) ? defaultResonanceQForCc(getCC?.(71) ?? 64) : undefined);
+      if (effectiveQ) filter.Q.value = effectiveQ;
       if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
-        const baseFreq = region.cutoffHz + cutoffOffset;
+        const baseFreq = baseCutoffHz + cutoffOffset;
         const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
         const envAttack = region.filEnvAttack ?? 0.005;
         const envDecay = region.filEnvDecay ?? 0;
@@ -379,10 +423,13 @@ export class SfzEngine {
 
     let output: AudioNode = gainNode;
     const ccPanOffset = region.ccPanN !== undefined && getCC ? ccCenterOffset((region.ccPanDepth ?? 0) / 100, getCC(region.ccPanN)) : 0;
-    if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0) {
+    // CC10 默认映射：未声明 ccN_pan 且 lane 画过 CC10 时，用轨级事件覆盖声像偏移。
+    const defaultPanOffset = region.ccPanN === undefined && ccActive?.(10) ? defaultPanOffsetForCc(getCC?.(10) ?? 64) : 0;
+    const notePan = params?.pan ?? region.pan ?? 0;
+    if (notePan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0 || defaultPanOffset !== 0) {
       const panner = this.context.createStereoPanner();
-      // pan_veltrack / ccN_pan：力度与 CC 调制声像。
-      panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * ((velocity - 64) / 63) + ccPanOffset;
+      // 音符级 pan 覆盖 region.pan；pan_veltrack / ccN_pan / CC10 默认映射叠加。
+      panner.pan.value = notePan / 100 + ((region.panVelTrack ?? 0) / 100) * ((velocity - 64) / 63) + ccPanOffset + defaultPanOffset;
       // F：pan LFO 叠加到 panner.pan。
       if (region.panLfoFreq && region.panLfoDepth) {
         const osc = this.context.createOscillator();

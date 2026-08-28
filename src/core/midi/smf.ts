@@ -44,6 +44,7 @@ interface ParsedTrack {
   tempos: TempoEvent[];
   timeSignatures: TimeSignatureEvent[];
   controllerEvents: Array<{ tick: number; channel: number; controller: number; value: number }>;
+  pitchBends: Array<{ tick: number; channel: number; value: number }>;
   endTick: number;
 }
 
@@ -122,6 +123,10 @@ export function importMidi(bytes: Uint8Array, options: MidiImportOptions = {}): 
           .filter((event) => event.channel === channel)
           .map((event) => ({ id: idFactory("cc"), tick: event.tick, controller: event.controller, value: event.value }))
           .sort((a, b) => a.tick - b.tick || a.controller - b.controller),
+        pitchBends: parsed.pitchBends
+          .filter((event) => event.channel === channel)
+          .map((event) => ({ id: idFactory("pb"), tick: event.tick, value: event.value }))
+          .sort((a, b) => a.tick - b.tick),
       });
       if ((parsed.programChangeCounts.get(channel) ?? 0) > 1) {
         warnings.push({
@@ -150,7 +155,7 @@ export function exportMidi(project: MidiProject, options: MidiExportOptions = {}
 
   const trackChunks = format === 0
     ? [encodeTrack(buildTypeZeroEvents(project))]
-    : [encodeTrack(buildConductorEvents(project)), ...project.tracks.map((track) => encodeTrack(buildTrackEvents(track)))];
+    : [encodeTrack(buildConductorEvents(project)), ...project.tracks.map((track) => encodeTrack(buildTrackEvents(track, project.ppq)))];
   const header = new ByteWriter();
   header.u32(HEADER_CHUNK);
   header.u32(6);
@@ -169,6 +174,7 @@ function parseTrack(bytes: Uint8Array, trackIndex: number, warnings: MidiImportW
     tempos: [],
     timeSignatures: [],
     controllerEvents: [],
+    pitchBends: [],
     endTick: 0,
   };
   const activeNotes = new Map<string, Array<{ tick: number; velocity: number; sequence: number }>>();
@@ -236,6 +242,9 @@ function parseTrack(bytes: Uint8Array, trackIndex: number, warnings: MidiImportW
       track.programChangeCounts.set(channel, (track.programChangeCounts.get(channel) ?? 0) + 1);
     } else if (eventType === 0xb0) {
       track.controllerEvents.push({ tick, channel, controller: data1, value: data2! });
+    } else if (eventType === 0xe0) {
+      // 弯音：14bit 无符号 0..16383 → 有符号 -8192..8191。
+      track.pitchBends.push({ tick, channel, value: ((data2! << 7) | data1) - 8192 });
     } else if (eventType === 0x90 && data2! > 0) {
       const key = `${channel}:${data1}`;
       const active = activeNotes.get(key) ?? [];
@@ -284,7 +293,7 @@ function buildConductorEvents(project: MidiProject): RawEvent[] {
   return events;
 }
 
-function buildTrackEvents(track: MidiTrack): RawEvent[] {
+function buildTrackEvents(track: MidiTrack, ppq: number): RawEvent[] {
   let sequence = 0;
   const events: RawEvent[] = [{ tick: 0, priority: 0, sequence: sequence++, bytes: metaText(0x03, track.name) }];
   // 音色引用（SoundFont）写出 bank select，保留音色 fidelity；SFZ/无引用轨道只写 program。
@@ -296,11 +305,54 @@ function buildTrackEvents(track: MidiTrack): RawEvent[] {
   for (const event of track.controllerEvents ?? []) {
     events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xb0 | track.channel, event.controller, event.value] });
   }
+  for (const event of track.pitchBends ?? []) {
+    const bend = Math.max(0, Math.min(16383, event.value + 8192));
+    events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xe0 | track.channel, bend & 0x7f, (bend >> 7) & 0x7f] });
+  }
   for (const note of track.notes) {
+    sequence = pushNoteAttributeEvents(events, sequence, track.channel, note, ppq);
     events.push({ tick: note.startTick, priority: 3, sequence: sequence++, bytes: [0x90 | track.channel, note.pitch, note.velocity] });
     events.push({ tick: note.startTick + note.durationTicks, priority: 2, sequence: sequence++, bytes: [0x80 | track.channel, note.pitch, 0] });
   }
   return events;
+}
+
+/** 写音符级属性的近似 MIDI 事件（在音符起点：CC10/71/74/72、0xE0 弯音；延音→CC64 对）。返回更新后的序号。 */
+function pushNoteAttributeEvents(
+  events: RawEvent[],
+  sequence: number,
+  channel: number,
+  note: MidiNote,
+  ppq: number,
+): number {
+  const acc = (value: number) => Math.max(0, Math.min(127, Math.round(value)));
+  if (note.pan !== undefined && note.pan !== 0) {
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xb0 | channel, 10, acc((note.pan + 100) / 2)] });
+  }
+  if (note.cutoffHz !== undefined && note.cutoffHz > 0) {
+    const cc = Math.log(note.cutoffHz / 200) / Math.log(100) * 127;
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xb0 | channel, 74, acc(cc)] });
+  }
+  if (note.resonanceQ !== undefined && note.resonanceQ > 0) {
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xb0 | channel, 71, acc((note.resonanceQ / 16.5) * 127)] });
+  }
+  if (note.release !== undefined && note.release > 0) {
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xb0 | channel, 72, acc((note.release / 2) * 127)] });
+  }
+  if (note.finePitchCents !== undefined && note.finePitchCents !== 0) {
+    const bend = Math.max(0, Math.min(16383, Math.round((note.finePitchCents / 200) * 8192) + 8192));
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xe0 | channel, bend & 0x7f, (bend >> 7) & 0x7f] });
+  }
+  if ((note.sustainBeats ?? 0) > 0) {
+    events.push({ tick: note.startTick, priority: 1, sequence: sequence++, bytes: [0xb0 | channel, 64, 127] });
+    events.push({
+      tick: note.startTick + note.durationTicks + Math.round((note.sustainBeats ?? 0) * ppq),
+      priority: 3,
+      sequence: sequence++,
+      bytes: [0xb0 | channel, 64, 0],
+    });
+  }
+  return sequence;
 }
 
 function buildTypeZeroEvents(project: MidiProject): RawEvent[] {
@@ -315,11 +367,16 @@ function buildTypeZeroEvents(project: MidiProject): RawEvent[] {
       events.push({ tick: 0, priority: 1, sequence: sequence++, bytes: [0xc0 | track.channel, track.program] });
     }
     for (const note of track.notes) {
+      sequence = pushNoteAttributeEvents(events, sequence, track.channel, note, project.ppq);
       events.push({ tick: note.startTick, priority: 3, sequence: sequence++, bytes: [0x90 | track.channel, note.pitch, note.velocity] });
       events.push({ tick: note.startTick + note.durationTicks, priority: 2, sequence: sequence++, bytes: [0x80 | track.channel, note.pitch, 0] });
     }
     for (const event of track.controllerEvents ?? []) {
       events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xb0 | track.channel, event.controller, event.value] });
+    }
+    for (const event of track.pitchBends ?? []) {
+      const bend = Math.max(0, Math.min(16383, event.value + 8192));
+      events.push({ tick: event.tick, priority: 2, sequence: sequence++, bytes: [0xe0 | track.channel, bend & 0x7f, (bend >> 7) & 0x7f] });
     }
   }
   return events;

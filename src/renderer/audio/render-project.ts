@@ -2,7 +2,7 @@ import { WorkletSynthesizer, audioBufferToWav } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import { createOggEncoder } from "wasm-media-encoders";
 import { exportMidi } from "../../core/midi/index.js";
-import { ccCenterOffset, oscillatorFrequency, pickSfzRegionsWithGain, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
+import { ccCenterOffset, defaultCutoffHzForCc, defaultPanOffsetForCc, defaultReleaseSecondsForCc, defaultResonanceQForCc, oscillatorFrequency, pickSfzRegionsWithGain, pitchBendSemitones, sampleVelCurve, selectSfzRegions } from "../../core/audio/sfz-parser.js";
 import type { MidiNote, MidiProject, MidiTrack } from "../../shared/midi.js";
 import type { SfzRegion } from "../../shared/instrument.js";
 
@@ -284,11 +284,21 @@ async function renderPlainLayer(
     };
     for (const track of group.tracks) {
       const events = track.controllerEvents ?? [];
+      const bends = track.pitchBends ?? [];
+      const activeCcs = new Set(events.map((event) => event.controller));
       // CC 值查询：≤ tick 的最后事件值，无则 64。
       const ccAt = (tick: number, controller: number): number => {
         let value = 64;
         for (const event of events) {
           if (event.controller === controller && event.tick <= tick) value = event.value;
+        }
+        return value;
+      };
+      // 弯音查询：≤ tick 的最后事件值，无则 0。
+      const bendAt = (tick: number): number => {
+        let value = 0;
+        for (const event of bends) {
+          if (event.tick <= tick) value = event.value;
         }
         return value;
       };
@@ -306,8 +316,12 @@ async function renderPlainLayer(
       };
       for (const note of track.notes) {
         const startSec = tickToSeconds(note.startTick, options.ppq, options.tempo);
-        const stopSec = startSec + tickToSeconds(holdEndAt(note.startTick + note.durationTicks) - note.startTick, options.ppq, options.tempo);
+        // 音符级延音（sustainBeats 拍）延长至踏板松开。
+        const sustainTicks = Math.round((note.sustainBeats ?? 0) * options.ppq);
+        const stopSec = startSec + tickToSeconds(holdEndAt(note.startTick + note.durationTicks + sustainTicks) - note.startTick, options.ppq, options.tempo);
         const ccQuery = (c: number) => ccAt(note.startTick, c);
+        const ccActive = (c: number) => activeCcs.has(c);
+        const bendSemitones = pitchBendSemitones(bendAt(note.startTick)) + ((note.finePitchCents ?? 0) / 100);
         for (const { region, gain } of pickSfzRegionsWithGain(group.regions, note.pitch, note.velocity, "attack", undefined, Math.random, undefined, false, ccQuery)) {
           let buffer: AudioBuffer;
           try {
@@ -315,7 +329,7 @@ async function renderPlainLayer(
           } catch {
             continue;
           }
-          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1, gain, ccQuery);
+          scheduleSfzSource(context, region, buffer, note, startSec, stopSec, track.volume ?? 1, gain, ccQuery, bendSemitones, ccActive);
         }
       }
     }
@@ -334,21 +348,23 @@ function scheduleSfzSource(
   context: OfflineAudioContext,
   region: SfzRegion,
   buffer: AudioBuffer,
-  note: { pitch: number; velocity: number },
+  note: { pitch: number; velocity: number; pan?: number; release?: number; cutoffHz?: number; resonanceQ?: number },
   startSec: number,
   stopSec: number,
   volume: number,
   crossfadeGain = 1,
   getCC?: (controller: number) => number,
+  bendSemitones = 0,
+  ccActive?: (controller: number) => boolean,
 ): void {
-  // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning 一同修正音高。
+  // A：keytrack（键跟随）/ pitchOffset（半音）/ pitch_veltrack / ccN_pitch 与 tuning、弯音一同修正音高。
   const keytrack = region.keytrack ?? 100;
   const velocityOffset = (note.velocity - 64) / 63;
   const ccPitchOffset = region.ccPitchN !== undefined && getCC
     ? ccCenterOffset(region.ccPitchDepth ?? 0, getCC(region.ccPitchN))
     : 0;
   const semitones = (note.pitch - region.keyCenter) * (keytrack / 100) + region.tuning / 100 + (region.pitchOffset ?? 0)
-    + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset;
+    + (region.pitchVelTrack ?? 0) * velocityOffset + ccPitchOffset + bendSemitones;
   const baseRate = 2 ** (semitones / 12);
   const playbackRate = region.playbackRate ?? 1;
   // A：触发延迟（供所有调度共用）。
@@ -398,7 +414,10 @@ function scheduleSfzSource(
   const attack = region.attack ?? 0.005;
   const decay = region.decay ?? 0;
   const sustainLevel = region.sustain !== undefined ? Math.max(0, region.sustain) / 100 : 1;
-  const release = region.release ?? 0.1;
+  // 音符级 release 优先，其次 CC72 默认映射，最后 region 声明。
+  const release = note.release
+    ?? region.release
+    ?? (ccActive?.(72) ? defaultReleaseSecondsForCc(getCC?.(72) ?? 64) : 0.1);
   const tAttack = startAt + attack;
   const tDecayEnd = tAttack + decay;
   const sustainGain = Math.max(0.0005, peak * sustainLevel);
@@ -444,17 +463,26 @@ function scheduleSfzSource(
     }
   }
   let chain: AudioNode = source;
-  if (region.filterType && region.cutoffHz) {
+  // 音符级 cutoffHz/resonanceQ 优先，其次 CC74/CC71 默认映射，最后 region 声明。
+  const noteCutoff = note.cutoffHz && note.cutoffHz > 0 ? note.cutoffHz : undefined;
+  const defaultCutoff = region.ccCutoffN === undefined && ccActive?.(74)
+    ? defaultCutoffHzForCc(getCC?.(74) ?? 64)
+    : undefined;
+  const baseCutoffHz = noteCutoff ?? defaultCutoff ?? region.cutoffHz;
+  if (baseCutoffHz !== undefined && (region.filterType !== undefined || noteCutoff !== undefined)) {
     const filter = context.createBiquadFilter();
-    filter.type = region.filterType === "bandreject" ? "notch" : region.filterType;
+    filter.type = region.filterType ? (region.filterType === "bandreject" ? "notch" : region.filterType) : "lowpass";
     // cutoff_veltrack / ccN_cutoff：力度与 CC 调制截止频率。
     const cutoffOffset = (region.cutoffVelTrack ?? 0) * velocityOffset
       + (region.ccCutoffN !== undefined && getCC ? ccCenterOffset(region.ccCutoffDepth ?? 0, getCC(region.ccCutoffN)) : 0);
-    filter.frequency.value = region.cutoffHz + cutoffOffset;
-    if (region.resonanceQ) filter.Q.value = region.resonanceQ;
+    filter.frequency.value = baseCutoffHz + cutoffOffset;
+    const effectiveQ = note.resonanceQ
+      ?? region.resonanceQ
+      ?? (region.ccCutoffN === undefined && ccActive?.(71) ? defaultResonanceQForCc(getCC?.(71) ?? 64) : undefined);
+    if (effectiveQ) filter.Q.value = effectiveQ;
     // 滤波包络：对 frequency 调度 attack→decay→sustain。
     if (region.filEnvDepth !== undefined && region.filEnvDepth !== 0) {
-      const baseFreq = region.cutoffHz + cutoffOffset;
+      const baseFreq = baseCutoffHz + cutoffOffset;
       const peakFreq = baseFreq * 2 ** (region.filEnvDepth / 1200);
       const envAttack = region.filEnvAttack ?? 0.005;
       const envDecay = region.filEnvDecay ?? 0;
@@ -471,9 +499,12 @@ function scheduleSfzSource(
   }
   let output: AudioNode = gainNode;
   const ccPanOffset = region.ccPanN !== undefined && getCC ? ccCenterOffset((region.ccPanDepth ?? 0) / 100, getCC(region.ccPanN)) : 0;
-  if (region.pan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0) {
+  // CC10 默认映射：未声明 ccN_pan 且 lane 画过 CC10 时用轨级事件覆盖声像偏移。
+  const defaultPanOffset = region.ccPanN === undefined && ccActive?.(10) ? defaultPanOffsetForCc(getCC?.(10) ?? 64) : 0;
+  const notePan = note.pan ?? region.pan ?? 0;
+  if (notePan !== 0 || (region.panLfoFreq && region.panLfoDepth) || (region.panVelTrack && region.panVelTrack !== 0) || ccPanOffset !== 0 || defaultPanOffset !== 0) {
     const panner = context.createStereoPanner();
-    panner.pan.value = region.pan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset + ccPanOffset;
+    panner.pan.value = notePan / 100 + ((region.panVelTrack ?? 0) / 100) * velocityOffset + ccPanOffset + defaultPanOffset;
     if (region.panLfoFreq && region.panLfoDepth) {
       const osc = context.createOscillator();
       configureLfo(context, osc, region.panLfoShape, region.panLfoPhase);

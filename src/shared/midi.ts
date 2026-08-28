@@ -24,6 +24,18 @@ export interface MidiNote {
   startTick: number;
   durationTicks: number;
   velocity: number;
+  /** 音符级声像（-100..100，缺省 0=居中）。 */
+  pan?: number;
+  /** 音符级释放尾音（秒，0..2；缺省=音源默认）。 */
+  release?: number;
+  /** 音符级滤波截止（Hz，0..20000；0 或缺省=不启用）。 */
+  cutoffHz?: number;
+  /** 音符级滤波共振（Q，0..16.5）。 */
+  resonanceQ?: number;
+  /** 音符级微调（音分，-100..100，缺省 0）。 */
+  finePitchCents?: number;
+  /** 延音踏板时长（拍，0..8，默认 0=踩 0 拍；播放时音符释放延后 N 拍）。 */
+  sustainBeats?: number;
 }
 
 /** MIDI 控制器事件（CC，如 CC64 延音踏板）。channel 取所属轨道的 channel。 */
@@ -33,6 +45,14 @@ export interface ControllerEvent {
   /** 控制器号（0–127，如 64=延音踏板）。 */
   controller: number;
   /** 控制器值（0–127）。 */
+  value: number;
+}
+
+/** MIDI 弯音事件（0xE0，轨级）。value 为 -8192..8191（0=基准音高，满量程 ±2 半音）。 */
+export interface PitchBendEvent {
+  id: string;
+  tick: number;
+  /** 弯音值（-8192..8191）。 */
   value: number;
 }
 
@@ -53,6 +73,8 @@ export interface MidiTrack {
   loopRegion?: TickRange | null;
   /** 轨道控制器事件（CC），如 CC64 延音踏板；缺省为空。 */
   controllerEvents?: ControllerEvent[];
+  /** 轨道弯音事件（0xE0）；缺省为空。 */
+  pitchBends?: PitchBendEvent[];
 }
 
 export interface Revision {
@@ -93,6 +115,12 @@ export interface NoteInput {
   startTick: number;
   durationTicks: number;
   velocity: number;
+  pan?: number;
+  release?: number;
+  cutoffHz?: number;
+  resonanceQ?: number;
+  finePitchCents?: number;
+  sustainBeats?: number;
 }
 
 export interface NoteChange {
@@ -101,6 +129,12 @@ export interface NoteChange {
   startTick?: number;
   durationTicks?: number;
   velocity?: number;
+  pan?: number;
+  release?: number;
+  cutoffHz?: number;
+  resonanceQ?: number;
+  finePitchCents?: number;
+  sustainBeats?: number;
 }
 
 export interface TrackInput {
@@ -116,6 +150,7 @@ export interface TrackInput {
   loopRegion?: TickRange | null;
   notes?: NoteInput[];
   controllerEvents?: ControllerEvent[];
+  pitchBends?: PitchBendEvent[];
 }
 
 export type MidiEditOperation =
@@ -130,6 +165,10 @@ export type MidiEditOperation =
       changes: Partial<Pick<MidiTrack, "name" | "role" | "channel" | "program" | "muted" | "solo">> & {
         /** 更换轨道音色引用；null 表示清除音色。 */
         instrument?: InstrumentReference | null;
+        /** 提供即替换整轨 CC 事件数组；null 表示清空。 */
+        controllerEvents?: ControllerEvent[] | null;
+        /** 提供即替换整轨弯音事件数组；null 表示清空。 */
+        pitchBends?: PitchBendEvent[] | null;
       };
     }
   | { type: "set_tempo"; tick: number; bpm: number }

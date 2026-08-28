@@ -16,6 +16,9 @@
 
 - 三栏桌面界面、轨道列表、Transport 与 Canvas 钢琴卷帘。
 - 音符绘制、选择、移动、右缘缩放、删除、力度编辑；网格与横向缩放。
+- 音符级 MIDI 属性（钢琴卷帘顶部参数 lanes 已移除）：MidiNote 可选字段 pan（-100..100）、release（0..2s）、cutoffHz（0..20000）、resonanceQ、finePitchCents（±100）、sustainBeats（延音拍数，默认 0）。「MIDI 属性」浮动面板（菜单栏「MIDI → MIDI 属性…」，可拖动、位置记忆）为音符属性编辑器：选中音符后七条滑杆（力度 + 六属性，力度滑杆从音符检查器移入）；未选中音符显示占位。
+  发声：SFZ 轨全部可听（cutoff/resonance/pan 覆盖 region，微调计音高，延音=noteOff 延后 N 拍，跨实时播放与离线导出）；SoundFont 轨每通道独立合成器实例 + StereoPanner/BiquadFilter 链使 力度/声像/截止/共振/延音 可听（重叠音符后音覆盖=通道近似），释放与微调受合成器库限制（无 CC72/pitchBend API）仅导出保留。轨级 `controllerEvents`/`pitchBends` 保留底层机制，仅供 MIDI 导入/导出兼容（SMF `0xb0`/`0xE0` 往返），播放以音符级属性优先。
+  导出：音符属性在音符起点近似写成 CC10/71/74/72、0xE0 弯音，延音写 CC64 127/0 对（起点 + 时长 + N 拍×ppq）。
 - 多轨 Mute、Solo、新建轨道、删除轨道（可撤销）；Web Audio 试听（SoundFont/SFZ/振荡器回退）。
 - 撤销、重做与单事务候选应用；撤销栈为「完整编辑快照」（轨道 + tempo + 拍号 + 循环区），一次 Ctrl+Z 可整单撤销含工程级操作的候选。
 - `.magent` 打开再保存保留工程 ID、Tempo Map、拍号、循环区、修订与 Agent 会话。
@@ -31,6 +34,7 @@
 - Pi Agent 是当前真实运行路径的底层内核（`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`）。
 - 受控工具：`inspect_midi_project`、`analyze_midi_project`、`propose_midi_changes`；
   `instrument_search`、`set_track_instrument`；Skill 作用域内 `list_skills` / `load_skill` / `invoke_skill`。
+- 系统提示词（`agent/context-prompt.md`，随包分发）含 SFZ 能力速览（已实现/未实现 opcode）与 MIDI 属性规则；音符级属性（pan/release/cutoffHz/resonanceQ/finePitchCents/sustainBeats）可在 insert_notes/update_notes/create_track 的音符字段给出，Schema 校验边界（越界拒绝），应用层透传；轨级 `controllerEvents`/`pitchBends`（CC10/71/72/74/64、0xE0）仍支持但标注为导入/导出兼容字段（替换整轨数组、null/[]=清空、应用层生成 id）——生成的轨道可自带音色与音符级 MIDI 属性。
 - `research` 不注册候选工具并在权限层再次阻止越权；`plan` 候选保持预览；`goal` 受预算约束且需用户确认。
 - 候选经 Schema + MIDI 领域校验；最多三个，重复候选 ID 被拒绝。无 API Key 时使用 Pi faux Provider 离线演示。
 - 三模式权限继承贯穿 Agent、Skill 子调用与候选应用（只读调研、计划预览、目标确认）。

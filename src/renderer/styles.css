@@ -1339,6 +1339,88 @@ html, body, #root { color: var(--text); background: var(--bg); }
   .settings-summary-grid { grid-template-columns: 1fr; }
 }
 
+/* ---- MIDI 属性浮动面板（可拖动、非模态、位置记忆、毛玻璃） ---- */
+.midi-panel {
+  position: fixed;
+  z-index: 25;
+  width: 300px;
+  min-width: 240px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-modal) 78%, transparent);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: 0 14px 38px rgba(0,0,0,.45);
+  color: var(--text);
+  font-size: 10px;
+}
+.midi-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-modal-alt) 84%, transparent);
+  border-radius: 8px 8px 0 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+.midi-panel-header strong { color: var(--muted); font: 600 8px "JetBrains Mono", monospace; letter-spacing: .12em; }
+.midi-panel-track { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 10px; }
+.midi-panel-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.midi-panel-close:hover { color: var(--text); }
+.midi-panel-body { display: grid; gap: 2px; padding: 8px 10px 6px; }
+.midi-panel-empty { padding: 14px 4px; color: var(--muted); text-align: center; }
+.midi-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 46px 22px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+}
+.midi-row-label { color: var(--text); font: 600 8px "JetBrains Mono", monospace; letter-spacing: .08em; }
+.midi-row-detail { display: none; }
+.midi-row input[type="range"] { width: 100%; accent-color: var(--accent); }
+.midi-row-value {
+  color: var(--muted);
+  font: 8px "JetBrains Mono", monospace;
+  text-align: right;
+  white-space: nowrap;
+}
+.midi-row-reset {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+.midi-row-reset:hover { color: var(--text); border-color: var(--line-strong); border-radius: 4px; }
+.midi-panel-note {
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.5;
+}
+/* 高对比主题：关闭毛玻璃，保持高可读性。 */
+:root[data-theme="high-contrast"] .midi-panel {
+  background: var(--surface-modal);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-theme="high-contrast"] .midi-panel-header { background: var(--surface-modal-alt); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

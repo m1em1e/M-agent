@@ -41,6 +41,7 @@ export function rendererPayloadToProject(payload: RendererProjectPayload): MidiP
       loopRegion: track.loopRegion,
       notes: track.notes,
       controllerEvents: track.controllerEvents,
+      pitchBends: track.pitchBends,
     }),
   );
   const validation = validateProject(project);
@@ -166,6 +167,17 @@ function assertTrackShapes(tracks: unknown[], context: string): void {
         if (!isRecord(cc) || typeof cc.id !== "string" || typeof cc.tick !== "number"
           || typeof cc.controller !== "number" || typeof cc.value !== "number") {
           throw new Error(`${context}的第 ${trackIndex + 1} 条轨道中，第 ${ccIndex + 1} 个控制器事件结构无效。`);
+        }
+      }
+    }
+    if (value.pitchBends !== undefined) {
+      if (!Array.isArray(value.pitchBends)) {
+        throw new Error(`${context}的第 ${trackIndex + 1} 条轨道弯音事件无效。`);
+      }
+      for (const [bendIndex, bend] of value.pitchBends.entries()) {
+        if (!isRecord(bend) || typeof bend.id !== "string" || typeof bend.tick !== "number"
+          || typeof bend.value !== "number") {
+          throw new Error(`${context}的第 ${trackIndex + 1} 条轨道中，第 ${bendIndex + 1} 个弯音事件结构无效。`);
         }
       }
     }

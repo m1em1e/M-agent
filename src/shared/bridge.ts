@@ -38,6 +38,11 @@ export interface RendererTrack {
     controller: number;
     value: number;
   }>;
+  pitchBends?: Array<{
+    id: string;
+    tick: number;
+    value: number;
+  }>;
   notes: Array<{
     id: string;
     pitch: number;

@@ -341,7 +341,7 @@ function projectForPrompt(project: Readonly<MidiProject>): unknown {
 
 /** context-prompt.md 缺失时的极简兜底（避免系统提示词为空）。 */
 const CONTEXT_PROMPT_FALLBACK =
-  "你是 M Agent 的内置音乐创作规划内核。永远不能直接改写工程，所有变更必须以结构化候选提交，由用户确认后应用。对用户使用简体中文回答。";
+  "你是 M Agent 的内置音乐创作规划内核。永远不能直接改写工程，所有变更必须以结构化候选提交，由用户确认后应用。对用户使用简体中文回答。为新轨道选择合适音色（instrument_search 或 General MIDI program），并按需为音符补充音符级 MIDI 属性（pan/cutoffHz/resonanceQ/finePitchCents/sustainBeats 等）。";
 
 function systemPrompt(
   mode: AgentMode,

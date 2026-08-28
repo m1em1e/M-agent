@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   ccCenterOffset,
+  defaultCutoffHzForCc,
+  defaultPanOffsetForCc,
+  defaultReleaseSecondsForCc,
+  defaultResonanceQForCc,
   nextKeyswitchState,
   oscillatorFrequency,
   parseSfzText,
   pickSfzRegions,
   pickSfzRegionsWithGain,
+  pitchBendSemitones,
   sampleVelCurve,
   selectSfzRegions,
 } from "../../src/core/audio/sfz-parser";
@@ -495,5 +500,33 @@ describe("oscillatorFrequency", () => {
     expect(oscillatorFrequency(69, 0)).toBeCloseTo(440, 5);
     expect(oscillatorFrequency(81, 0)).toBeCloseTo(880, 5);
     expect(oscillatorFrequency(69, 12)).toBeCloseTo(880, 5);
+  });
+});
+
+describe("轨级 CC 默认映射（PAN/RELEASE/CUTOFF/RESONANCE lane）", () => {
+  it("CC74 → 截止频率（对数 200Hz..20kHz）", () => {
+    expect(defaultCutoffHzForCc(0)).toBeCloseTo(200, 5);
+    expect(defaultCutoffHzForCc(127)).toBeCloseTo(20000, 0);
+    expect(defaultCutoffHzForCc(64)).toBeGreaterThan(1000);
+    expect(defaultCutoffHzForCc(64)).toBeLessThan(4000);
+    expect(defaultCutoffHzForCc(96)).toBeGreaterThan(defaultCutoffHzForCc(64));
+  });
+  it("CC10 → 声像偏移；CC71 → 共振 Q；CC72 → release 秒", () => {
+    expect(defaultPanOffsetForCc(64)).toBe(0);
+    expect(defaultPanOffsetForCc(32)).toBeCloseTo(-0.5, 5);
+    expect(defaultPanOffsetForCc(96)).toBeCloseTo(0.5, 5);
+    expect(defaultReleaseSecondsForCc(0)).toBe(0);
+    expect(defaultReleaseSecondsForCc(127)).toBeCloseTo(2, 5);
+    expect(defaultResonanceQForCc(0)).toBeCloseTo(0.5, 5);
+    expect(defaultResonanceQForCc(127)).toBeCloseTo(16.5, 5);
+  });
+});
+
+describe("弯音值换算（0xE0，满量程 ±2 半音）", () => {
+  it("pitchBendSemitones：0→0、±8192→±2、4096→+1", () => {
+    expect(pitchBendSemitones(0)).toBe(0);
+    expect(pitchBendSemitones(8192)).toBeCloseTo(2, 5);
+    expect(pitchBendSemitones(-8192)).toBeCloseTo(-2, 5);
+    expect(pitchBendSemitones(4096)).toBeCloseTo(1, 5);
   });
 });

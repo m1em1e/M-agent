@@ -36,6 +36,7 @@
 ### 数据契约、安全与编辑器
 - 严格限制 `Revision.source` 与 `AgentSession.mode` 枚举值；明确空 `tempoMap` / `timeSignatures` 规范化策略；限制工程标题长度并清理 Windows 非法字符。
 - 钢琴卷帘：框选、复制粘贴、多音符批量编辑与更完整的播放控制（当前 rAF 驱动，非采样级时钟）。
+- 音符级 MIDI 属性（pan/release/cutoffHz/resonanceQ/finePitchCents/sustainBeats）已实现（钢琴卷帘顶部 lanes 已移除，编辑统一在「MIDI 属性」浮动面板，力度滑杆自音符检查器移入）；已知限制：SoundFont 轨无弯音/释放 API——finePitch 与 release 在 SoundFont 轨仅导出保留不发声，SoundFont 轨的声像/截止/共振为每通道节点链近似（重叠音符后音覆盖），「默认 CC 映射」为 M Agent 的实用层扩展（SFZ 标准要求 .sfz 声明 `ccN_*`），轨级 `controllerEvents`/`pitchBends` 仅供 MIDI 导入/导出兼容。Agent 生成的音符属性和轨级事件同样受此限制；SoundFont/振荡器轨离线导出暂不叠加音符属性（仅 SFZ 轨离线生效）。
 - 增加真实 MIDI 文件、超大工程、损坏工程、音源文件与安装包自动化测试。
 - 增加可见的取消 Agent 操作、流式输出与会话管理（取消与实时状态已实现；会话管理未做）。
 

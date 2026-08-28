@@ -219,4 +219,91 @@ describe("proposed change-set schema", () => {
     ];
     expect(() => parseProposedChangeSet(input)).toThrow(/重复的 patternId/);
   });
+
+  it("accepts create_track with controllerEvents/pitchBends (ids optional)", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: {
+        id: "bass",
+        name: "Bass",
+        role: "bass",
+        channel: 2,
+        program: 33,
+        instrument: { type: "sfz", libraryId: "piano-fx" },
+        controllerEvents: [{ tick: 0, controller: 74, value: 96 }, { tick: 480, controller: 10, value: 32 }],
+        pitchBends: [{ tick: 0, value: 512 }, { tick: 960, value: -4096 }],
+        notes: [{ pitch: 40, startTick: 0, durationTicks: 960, velocity: 84 }],
+      },
+    }];
+    expect(parseProposedChangeSet(input)).toMatchObject({
+      operations: [expect.objectContaining({ type: "create_track" })],
+    });
+  });
+
+  it("accepts update_track replacing controllerEvents/pitchBends and null clear", () => {
+    const set = validRawChangeSet();
+    set.operations = [{
+      type: "update_track",
+      trackId: "track-1",
+      changes: { controllerEvents: [{ tick: 0, controller: 74, value: 90 }], pitchBends: [] },
+    }];
+    expect(parseProposedChangeSet(set)).toBeTruthy();
+    set.operations = [{ type: "update_track", trackId: "track-1", changes: { controllerEvents: null, pitchBends: null } }];
+    expect(parseProposedChangeSet(set)).toBeTruthy();
+  });
+
+  it("rejects out-of-range controllerEvents and pitchBends", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: { name: "Bad", channel: 0, program: 0, controllerEvents: [{ tick: 0, controller: 128, value: 500 }] },
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(/controller|value/);
+    const input2 = validRawChangeSet();
+    input2.operations = [{
+      type: "create_track",
+      track: { name: "Bad2", channel: 0, program: 0, pitchBends: [{ tick: -1, value: 10000 }] },
+    }];
+    expect(() => parseProposedChangeSet(input2)).toThrow(/tick|value/);
+  });
+
+  it("rejects oversized track event arrays", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "create_track",
+      track: {
+        name: "Fat",
+        channel: 0,
+        program: 0,
+        controllerEvents: Array.from({ length: 4001 }, (_, i) => ({ tick: i, controller: 10, value: 64 })),
+      },
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(/4000/);
+  });
+
+  it("accepts note-level MIDI attributes on notes", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "insert_notes",
+      trackId: "track-1",
+      notes: [{
+        pitch: 60, startTick: 0, durationTicks: 480, velocity: 84,
+        pan: -40, release: 1.2, cutoffHz: 2000, resonanceQ: 8, finePitchCents: -25, sustainBeats: 2,
+      }],
+    }];
+    expect(parseProposedChangeSet(input)).toMatchObject({
+      operations: [expect.objectContaining({ type: "insert_notes" })],
+    });
+  });
+
+  it("rejects out-of-range note attributes", () => {
+    const input = validRawChangeSet();
+    input.operations = [{
+      type: "insert_notes",
+      trackId: "track-1",
+      notes: [{ pitch: 60, startTick: 0, durationTicks: 480, velocity: 84, cutoffHz: 50000, sustainBeats: 99 }],
+    }];
+    expect(() => parseProposedChangeSet(input)).toThrow(/cutoffHz|sustainBeats/);
+  });
 });
