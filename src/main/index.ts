@@ -6,7 +6,7 @@ import { exportMidi, importMidi } from "../core/midi/index.js";
 import type { RendererProjectPayload } from "../shared/bridge.js";
 import type { MidiProject } from "../shared/midi.js";
 import { assertProjectFile, rendererPayloadToProject } from "./project-adapter.js";
-import { clearApiKey, getApiKey, hasApiKey } from "./secure-settings.js";
+import { clearLegacyApiKey, readLegacyApiKey } from "./secure-settings.js";
 import {
   getStartupEnvironmentReport,
   clearProviderApiKey,
@@ -17,7 +17,6 @@ import {
   saveProviderApiKey,
   migrateLegacyApiKey,
 } from "./environment-service.js";
-import { getPiCredentialStore } from "./pi-credential-store.js";
 import { checkAndSaveConfiguredShell, getConfiguredShellSettings } from "./shell-service.js";
 import { registerSubscriptionIpc } from "./subscription-ipc.js";
 import { registerUsageIpc } from "./usage-ipc.js";
@@ -263,16 +262,6 @@ ipcMain.handle("shell:check", async (event, path: unknown) => {
   }
 });
 
-ipcMain.handle("settings:save-api-key", async (_event, key: unknown) => {
-  await saveProviderApiKey("openai", key);
-});
-ipcMain.handle("settings:clear-api-key", async () => {
-  clearApiKey();
-  await clearProviderApiKey("openai");
-});
-ipcMain.handle("settings:has-api-key", async () => (
-  hasApiKey() || Boolean(await getPiCredentialStore().read("openai"))
-));
 ipcMain.handle("environment:get-startup-report", () => getStartupEnvironmentReport());
 ipcMain.handle("provider:save-api-key", async (_event, providerId: unknown, key: unknown) => {
   if (providerId !== "openai") throw new Error("不支持的 API Key 供应商。");
@@ -281,7 +270,6 @@ ipcMain.handle("provider:save-api-key", async (_event, providerId: unknown, key:
 });
 ipcMain.handle("provider:clear-api-key", async (_event, providerId: unknown) => {
   if (providerId !== "openai") throw new Error("不支持的 API Key 供应商。");
-  clearApiKey();
   await clearProviderApiKey(providerId);
   return getStartupEnvironmentReport();
 });
@@ -379,10 +367,10 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   void (async () => {
     try {
-      const legacyKey = getApiKey();
+      const legacyKey = readLegacyApiKey();
       if (legacyKey) {
         await migrateLegacyApiKey(legacyKey);
-        clearApiKey();
+        clearLegacyApiKey();
       }
     } catch (error) {
       console.warn("旧版 API Key 迁移未完成：", error instanceof Error ? error.message : "未知错误");

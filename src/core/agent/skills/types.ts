@@ -1,4 +1,7 @@
 import type { MidiEditOperation } from "../../../shared/midi.js";
+import type { SkillInvocationStatus, SkillTraceEntry } from "../../../shared/skills.js";
+
+export type { SkillInvocationStatus, SkillTraceEntry } from "../../../shared/skills.js";
 
 /** 运行时加载的一个 Skill 定义（frontmatter name/description + SKILL.md 正文）。 */
 export interface SkillDefinition {
@@ -40,20 +43,8 @@ export interface SkillInvocationResult {
   assumptions: string[];
   warnings: string[];
   depth: number;
-  status: "ok" | "skipped" | "error";
+  status: SkillInvocationStatus;
   error?: string;
-}
-
-/** 一次子调用的可观测记录。 */
-export interface SkillTraceEntry {
-  parentSkill?: string;
-  childSkill: string;
-  depth: number;
-  startedAt: number;
-  durationMs: number;
-  status: SkillInvocationResult["status"];
-  operationCount: number;
-  affectedNoteCount: number;
 }
 
 /** 嵌套调用的防失控状态（深度优先、逐次传递、共享 childCounts 与 totalCalls）。 */

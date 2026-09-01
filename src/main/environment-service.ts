@@ -15,7 +15,6 @@ import type {
   StartupEnvironmentReport,
 } from "../shared/bridge.js";
 import type { PiCustomProviderConfig } from "../core/agent/pi-kernel.js";
-import { getApiKey } from "./secure-settings.js";
 import { getPiCredentialStore } from "./pi-credential-store.js";
 import { PiCliCredentialStore } from "./pi-cli-credential-store.js";
 import { getActiveSubscriptionProfile, readSubscriptionApiKey } from "./subscription-store.js";
@@ -74,7 +73,7 @@ export async function getStartupEnvironmentReport(): Promise<StartupEnvironmentR
     nodeVersion: process.versions.node,
     electronVersion: process.versions.electron ?? "",
     safeStorageAvailable: safeStorage.isEncryptionAvailable(),
-    secureApiKey: getApiKey(),
+    secureApiKey: await readStoredApiKey(),
     environmentApiKey: Boolean(process.env.OPENAI_API_KEY?.trim()),
     appCredentials: getPiCredentialStore(),
     piCredentials: new PiCliCredentialStore(),
@@ -192,7 +191,7 @@ export async function resolveAgentAuthentication(signal?: AbortSignal): Promise<
       }
     }
   }
-  const secureApiKey = getApiKey();
+  const secureApiKey = await readStoredApiKey();
   if (secureApiKey) return { provider: "openai", apiKey: secureApiKey };
   const appCredentials = getPiCredentialStore();
   const pi = await loadPiRuntime();
@@ -274,6 +273,14 @@ export async function importPiCliCredentials(): Promise<readonly CredentialInfo[
     imported.push({ providerId, type: credential.type });
   }
   return imported;
+}
+
+/** 从应用自有加密存储读取 OpenAI API Key（凭据统一来源）。 */
+async function readStoredApiKey(): Promise<string | null> {
+  const credential = await getPiCredentialStore().read("openai");
+  return credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()
+    ? credential.key
+    : null;
 }
 
 export async function clearProviderApiKey(providerId: "openai"): Promise<void> {

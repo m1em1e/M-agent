@@ -1,12 +1,16 @@
 import type {
   AgentMode,
   AgentSession,
+  ControllerEvent,
+  MidiNote,
   MidiProject,
+  PitchBendEvent,
   ProposedChangeSet,
   Revision,
   TempoEvent,
   TickRange,
   TimeSignatureEvent,
+  TrackRole,
 } from "./midi.js";
 import type { ConversationSettings, PiThinkingLevel } from "./conversation-settings.js";
 import type { BrowseShellResult, ShellCheckResult, ShellSettingsSnapshot } from "./shell.js";
@@ -18,12 +22,12 @@ import type {
   SubscriptionSummary,
 } from "./subscriptions.js";
 import type { InstrumentReference, InstrumentLibrarySummary, ProjectInstrument, ProjectInstrumentSnapshot } from "./instrument.js";
-import type { SkillTraceEntry } from "../core/agent/skills/types.js";
+import type { SkillTraceEntry } from "./skills.js";
 
 export interface RendererTrack {
   id: string;
   name: string;
-  role: "melody" | "harmony" | "bass" | "drums" | "other";
+  role: TrackRole;
   color?: string;
   channel?: number;
   program: number;
@@ -32,24 +36,9 @@ export interface RendererTrack {
   volume?: number;
   instrument?: InstrumentReference;
   loopRegion?: TickRange | null;
-  controllerEvents?: Array<{
-    id: string;
-    tick: number;
-    controller: number;
-    value: number;
-  }>;
-  pitchBends?: Array<{
-    id: string;
-    tick: number;
-    value: number;
-  }>;
-  notes: Array<{
-    id: string;
-    pitch: number;
-    startTick: number;
-    durationTicks: number;
-    velocity: number;
-  }>;
+  controllerEvents?: ControllerEvent[];
+  pitchBends?: PitchBendEvent[];
+  notes: MidiNote[];
 }
 
 export interface RendererProjectPayload {
@@ -211,9 +200,6 @@ export interface MagentBridge {
   exportAudio(payload: { format: "wav" | "ogg"; bytes: ArrayBuffer; defaultName: string }): Promise<SaveResult>;
   openProject(): Promise<OpenMidiResult>;
   saveProject(payload: RendererProjectPayload, defaultName?: string): Promise<SaveResult>;
-  saveApiKey(key: string): Promise<void>;
-  clearApiKey(): Promise<void>;
-  hasApiKey(): Promise<boolean>;
   saveProviderApiKey(providerId: "openai", key: string): Promise<StartupEnvironmentReport>;
   clearProviderApiKey(providerId: "openai"): Promise<StartupEnvironmentReport>;
   getStartupEnvironment(): Promise<StartupEnvironmentReport>;

@@ -1,6 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { fileURLToPath, URL } from "node:url";
 import { copyFileSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
@@ -58,12 +57,6 @@ export default defineConfig({
   // Production is loaded through file://, so emitted assets must stay relative.
   base: "./",
   plugins: [react(), copyWorkletProcessor(), devCsp()],
-  resolve: {
-    alias: {
-      "@shared": fileURLToPath(new URL("./src/shared", import.meta.url)),
-      "@core": fileURLToPath(new URL("./src/core", import.meta.url))
-    }
-  },
   build: {
     outDir: "../../dist",
     emptyOutDir: true

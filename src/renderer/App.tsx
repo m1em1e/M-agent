@@ -21,17 +21,68 @@ import type {
   UsagePage,
   UsageSummary,
 } from "../shared/bridge";
-import type { AgentSession, MidiProject, ProposedChangeSet, Revision, TempoEvent, TickRange, TimeSignatureEvent } from "../shared/midi";
+import type {
+  AgentMode,
+  MidiNote,
+  TempoEvent,
+  TickRange,
+  TimeSignatureEvent,
+  TrackRole,
+} from "../shared/midi";
 import { projectVersionOf } from "../shared/project-version";
 import type { ShellCheckResult } from "../shared/shell";
 import type { InstrumentLibrarySummary, InstrumentReference, ProjectInstrument } from "../shared/instrument";
-import { buildProjectInstruments } from "../shared/instrument";
-import type { SkillTraceEntry } from "../core/agent/skills/types";
 import { APP_MENU_GROUPS, recentProjectLabel, type AppMenuItem } from "../shared/menu";
 import { hitLoopBand, LOOP_HANDLE_HEIGHT, loopRangeFromDrag, resizedLoopEnd, resizedLoopStart, shiftedLoopRange } from "./loop-ruler";
 import { AudioEngine } from "./audio/audio-engine";
 import { MidiPropertiesPanel } from "./midi-properties-panel";
 import { MarkdownContent } from "./markdown";
+import {
+  CANVAS_HEIGHT,
+  candidateFromChangeSet,
+  clamp,
+  cleanAgentError,
+  cloneTracks,
+  computeBarCount,
+  errorMessage,
+  isBlackKey,
+  isMissingProjectError,
+  KEY_WIDTH,
+  mergeEventsByTick,
+  MIN_PITCH,
+  MAX_PITCH,
+  modeMeta,
+  NOTES_TOP,
+  normalizeTimeSignatureNumerator,
+  noteAudioParams,
+  noteDurationMs,
+  noteName,
+  PPQ,
+  BEATS_PER_BAR,
+  ROW_HEIGHT,
+  RULER_HEIGHT,
+  TIME_SIGNATURE_DENOMINATORS,
+  TIME_SIGNATURE_NUMERATORS,
+  toProjectPayload,
+  TRACK_COLORS,
+  uid,
+  WELCOME_MESSAGE,
+  applyNoteChangeSet,
+  projectToTracks,
+  subscriptionSourceLabel,
+  type ApplyResult,
+  type Candidate,
+  type ChatMessage,
+  type MidiTrack,
+  type ProjectMetadata,
+} from "./app-utils";
+import { initialTracks, seedCandidates } from "./demo-content";
+import { Icon } from "./icon";
+import { PaneResizer } from "./pane-resizer";
+import { EnvironmentAlertBanner, InstrumentAlertBanner } from "./alert-banner";
+import { ExportAudioModal } from "./export-modal";
+import { MissingProjectDialog, MigratePathDialog, UnsavedChangesDialog, WindowChoiceDialog } from "./confirm-dialog";
+import { PluginsPane } from "./plugins-pane";
 import {
   SUBSCRIPTION_API_TYPES,
   subscriptionApiTypeLabel,
@@ -90,9 +141,7 @@ import {
 } from "./workspace-layout";
 import { clearLegacyShellSettings, DEFAULT_SHELL_SETTINGS } from "./shell-settings";
 
-type AgentMode = "research" | "plan" | "goal";
 type EditorTool = "pointer" | "pencil";
-type TrackRole = "melody" | "harmony" | "bass" | "drums" | "other";
 type SettingsSection = "general" | "providers" | "usage" | "sound" | "plugins";
 
 const settingsSections: Array<{ id: SettingsSection; label: string; icon: string }> = [
@@ -102,79 +151,6 @@ const settingsSections: Array<{ id: SettingsSection; label: string; icon: string
   { id: "sound", label: "音源", icon: "music" },
   { id: "plugins", label: "插件", icon: "plugin" },
 ];
-
-interface MidiNote {
-  id: string;
-  pitch: number;
-  startTick: number;
-  durationTicks: number;
-  velocity: number;
-  pan?: number;
-  release?: number;
-  cutoffHz?: number;
-  resonanceQ?: number;
-  finePitchCents?: number;
-  sustainBeats?: number;
-}
-
-interface ControllerEvent {
-  id: string;
-  tick: number;
-  controller: number;
-  value: number;
-}
-
-interface PitchBendEvent {
-  id: string;
-  tick: number;
-  value: number;
-}
-
-interface MidiTrack {
-  id: string;
-  name: string;
-  role: TrackRole;
-  color: string;
-  channel: number;
-  program: number;
-  muted: boolean;
-  solo: boolean;
-  volume?: number;
-  instrument?: InstrumentReference;
-  loopRegion?: TickRange | null;
-  controllerEvents?: ControllerEvent[];
-  pitchBends?: PitchBendEvent[];
-  notes: MidiNote[];
-}
-
-interface Candidate {
-  id: string;
-  title: string;
-  description: string;
-  score: number;
-  notesAdded: number;
-  notesChanged: number;
-  notesDeleted: number;
-  loopScore: string;
-  changeSet: ProposedChangeSet;
-  supported: boolean;
-  sourceMode: AgentMode;
-  /** 生成该候选时的工程版本（用于应用前比对；undefined 表示离线/跳过校验）。 */
-  projectVersion?: string;
-  state?: "accepted" | "rejected";
-}
-
-interface ChatMessage {
-  id: string;
-  author: "agent" | "user";
-  text: string;
-  thinking?: ThinkingSegment[];
-  /** 正在流式写入的思考片段（未完成的段，展开显示）。 */
-  streamingThinking?: string;
-  /** 流式思考段开始时刻（毫秒时间戳），用于实时显示该段已用时长。 */
-  streamingThinkingStartedAt?: number;
-  skillTrace?: SkillTraceEntry[];
-}
 
 interface NoteDragState {
   kind: "move" | "resize";
@@ -208,15 +184,6 @@ interface WorkspaceResizeState {
   startWidth: number;
 }
 
-interface ProjectMetadata {
-  id: string;
-  tempoMap: TempoEvent[];
-  timeSignatures: TimeSignatureEvent[];
-  loopRegion: TickRange | null;
-  revisions: Revision[];
-  agentSessions: AgentSession[];
-}
-
 /** 撤销/重做栈里的完整编辑快照（轨道 + 速度/拍号/循环区）。 */
 interface EditorSnapshot {
   tracks: MidiTrack[];
@@ -228,539 +195,6 @@ interface EditorSnapshot {
   loopRegion: TickRange | null;
 }
 
-/** 应用候选后需要回写编辑器的结果（仅包含发生变化的字段）。 */
-interface ApplyResult {
-  tracks: MidiTrack[];
-  tempo?: number;
-  timeSigNumerator?: number;
-  timeSigDenominator?: number;
-  tempoMap?: TempoEvent[];
-  timeSignatures?: TimeSignatureEvent[];
-  loopRegion?: TickRange | null;
-}
-
-const PPQ = 480;
-const BEATS_PER_BAR = 4;
-const MIN_PITCH = 36;
-const MAX_PITCH = 96;
-
-const WELCOME_MESSAGE = `欢迎使用 M Agent——面向独立游戏开发者的桌面 MIDI 创作 Agent。
-
-可直接描述编曲想法（如"把这段改成 JRPG 战斗音乐"），我会分析工程并给出可预览、可撤销的修改方案；
-在输入框按 @ 打开 Skill 选择（例如 @song-arranger 一键编排）。点击 + 添加轨道，双击钢琴卷帘添加音符。`;
-const ROW_HEIGHT = 18;
-
-/** 拍号分母 → 合法分子集合（按乐理惯例） */
-const TIME_SIGNATURE_NUMERATORS: Readonly<Record<number, readonly number[]>> = {
-  1: [1, 2, 3, 4],
-  2: [2, 3, 4, 6],
-  4: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-  8: [3, 5, 6, 7, 9, 12],
-  16: [3, 6, 12],
-  32: [6, 12],
-};
-const TIME_SIGNATURE_DENOMINATORS = [1, 2, 4, 8, 16, 32] as const;
-
-function normalizeTimeSignatureNumerator(numerator: number, denominator: number): number {
-  const allowed = TIME_SIGNATURE_NUMERATORS[denominator] ?? TIME_SIGNATURE_NUMERATORS[4];
-  if (allowed.includes(numerator)) return numerator;
-  return allowed.reduce((best, value) => (Math.abs(value - numerator) < Math.abs(best - numerator) ? value : best));
-}
-const KEY_WIDTH = 68;
-const RULER_HEIGHT = 30;
-/** CC64 延音踏板 lane 高度（标尺下方、音符区顶部）。 */
-/** 音符区起点（标尺之下；参数 lane 已移除，音符区直接从标尺下方开始）。 */
-const NOTES_TOP = RULER_HEIGHT;
-const CANVAS_HEIGHT = NOTES_TOP + (MAX_PITCH - MIN_PITCH + 1) * ROW_HEIGHT;
-const TRACK_COLORS = ["#ff9d78", "#b9e66c", "#73c8ff", "#c7a5ff", "#f4d66d", "#ff79a9"];
-
-let nextId = 100;
-const uid = (prefix: string) => `${prefix}-${nextId++}`;
-const cloneTracks = (tracks: MidiTrack[]) =>
-  tracks.map((track) => ({ ...track, notes: track.notes.map((note) => ({ ...note })) }));
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
-const isBlackKey = (pitch: number) => [1, 3, 6, 8, 10].includes(pitch % 12);
-const noteName = (pitch: number) => {
-  const names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
-  return `${names[pitch % 12]}${Math.floor(pitch / 12) - 1}`;
-};
-
-/** 把候选里的轨级 CC 事件规范化为本地事件（忽略模型给的 id，应用层生成，按 tick 排序）。 */
-const normalizeCcEvents = (events: Array<{ id?: string; tick: number; controller: number; value: number }>): ControllerEvent[] =>
-  events.map((event) => ({ id: uid("cc"), tick: event.tick, controller: event.controller, value: event.value }))
-    .sort((a, b) => a.tick - b.tick || a.controller - b.controller);
-
-/** MidiNote 可选字段 → 引擎音符级参数（未设置的键不出现）。 */
-const noteAudioParams = (note: MidiNote): { pan?: number; releaseSeconds?: number; cutoffHz?: number; resonanceQ?: number; finePitchCents?: number } => ({
-  ...(note.pan !== undefined ? { pan: note.pan } : {}),
-  ...(note.release !== undefined ? { releaseSeconds: note.release } : {}),
-  ...(note.cutoffHz !== undefined ? { cutoffHz: note.cutoffHz } : {}),
-  ...(note.resonanceQ !== undefined ? { resonanceQ: note.resonanceQ } : {}),
-  ...(note.finePitchCents !== undefined ? { finePitchCents: note.finePitchCents } : {}),
-});
-
-/** 把候选里的轨级弯音事件规范化为本地事件（忽略模型给的 id，应用层生成，按 tick 排序）。 */
-const normalizePitchBends = (events: Array<{ id?: string; tick: number; value: number }>): PitchBendEvent[] =>
-  events.map((event) => ({ id: uid("pb"), tick: event.tick, value: event.value }))
-    .sort((a, b) => a.tick - b.tick);
-const errorMessage = (error: unknown, fallback: string) => error instanceof Error && error.message.trim()
-  ? `${fallback}：${error.message}`
-  : fallback;
-
-/** 把 Agent 运行失败的错误整理成可读文本（去掉 IPC 封装与错误 JSON 噪音）。 */
-const cleanAgentError = (error: unknown): string => {
-  let message = error instanceof Error ? error.message : String(error);
-  const ipcIndex = message.indexOf("Error invoking remote method");
-  if (ipcIndex >= 0) {
-    const afterPrefix = message.slice(ipcIndex).split(":").slice(1).join(":").trim();
-    const lastError = afterPrefix.lastIndexOf("Error: ");
-    message = lastError >= 0 ? afterPrefix.slice(lastError + "Error: ".length).trim() : afterPrefix;
-  }
-  const jsonMatch = message.match(/\{[\s\S]*\}$/);
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch[0]) as { message?: unknown };
-      if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
-    } catch {
-      // 无法解析 JSON 时回退到原始信息。
-    }
-  }
-  return message.trim() || "Agent 请求失败。";
-};
-
-/** 判定最近工程打开失败是否源于「工程缺失/不可访问」（主进程 PROJECT_MISSING 标记）。 */
-const isMissingProjectError = (error: unknown): boolean => {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("PROJECT_MISSING");
-};
-
-/** 音符时长（tick → 毫秒），用于试听延音；钳制到合理范围避免过短/过长。 */
-const noteDurationMs = (note: { durationTicks: number }, ppq: number, tempo: number): number =>
-  Math.max(80, Math.min(8000, (note.durationTicks / ppq) * (60000 / tempo)));
-
-const pattern = (
-  pitches: number[],
-  every: number,
-  duration: number,
-  bars = 4,
-  velocity = 88,
-): MidiNote[] =>
-  Array.from({ length: bars * BEATS_PER_BAR }, (_, index) => ({
-    id: uid("note"),
-    pitch: pitches[index % pitches.length],
-    startTick: Math.round(index * every),
-    durationTicks: Math.max(1, Math.round(duration)),
-    velocity: velocity + ((index % 3) - 1) * 5,
-  }));
-
-const initialTracks: MidiTrack[] = [
-  {
-    id: "track-melody",
-    name: "Glass Thread",
-    role: "melody",
-    color: TRACK_COLORS[0],
-    channel: 0,
-    program: 11,
-    muted: false,
-    solo: false,
-    notes: pattern([72, 76, 79, 81, 79, 76, 74, 71], PPQ, PPQ * 0.76, 4, 92),
-  },
-  {
-    id: "track-harmony",
-    name: "Soft Chords",
-    role: "harmony",
-    color: TRACK_COLORS[1],
-    channel: 1,
-    program: 89,
-    muted: false,
-    solo: false,
-    notes: [48, 52, 55, 45, 48, 52, 41, 45, 48, 43, 47, 50].map((pitch, index) => ({
-      id: uid("note"),
-      pitch,
-      startTick: Math.floor(index / 3) * PPQ * 4,
-      durationTicks: Math.round(PPQ * 3.7),
-      velocity: 58 + (index % 3) * 4,
-    })),
-  },
-  {
-    id: "track-bass",
-    name: "Night Bass",
-    role: "bass",
-    color: TRACK_COLORS[2],
-    channel: 2,
-    program: 38,
-    muted: false,
-    solo: false,
-    notes: pattern([48, 48, 45, 45, 41, 41, 43, 43], PPQ * 2, PPQ * 1.55, 8, 76),
-  },
-  {
-    id: "track-drums",
-    name: "Dust Kit",
-    role: "drums",
-    color: TRACK_COLORS[3],
-    channel: 9,
-    program: 0,
-    muted: false,
-    solo: false,
-    notes: pattern([36, 42, 38, 42], PPQ / 2, PPQ * 0.16, 2, 72),
-  },
-];
-
-const seedCandidates: Candidate[] = [
-  {
-    id: "candidate-a",
-    title: "A · 更克制的结尾",
-    description: "收窄旋律音域，在第 8 小节留出呼吸，并用上行二度衔接循环起点。",
-    score: 92,
-    notesAdded: 7,
-    notesChanged: 4,
-    notesDeleted: 0,
-    loopScore: "无缝",
-    supported: true,
-    sourceMode: "goal",
-    changeSet: {
-      id: "candidate-a",
-      summary: "更克制的结尾",
-      operations: [{ type: "insert_notes", trackId: "track-melody", notes: [
-        { pitch: 71, startTick: PPQ * 28, durationTicks: Math.round(PPQ * 0.75), velocity: 78 },
-        { pitch: 72, startTick: PPQ * 29, durationTicks: Math.round(PPQ * 0.75), velocity: 82 },
-        { pitch: 74, startTick: PPQ * 30, durationTicks: Math.round(PPQ * 0.75), velocity: 74 },
-        { pitch: 71, startTick: PPQ * 31, durationTicks: Math.round(PPQ * 0.7), velocity: 68 },
-      ] }],
-      estimatedAffectedNotes: 4,
-    },
-  },
-  {
-    id: "candidate-b",
-    title: "B · 增加探索感",
-    description: "低音改为切分节奏，旋律保留长音，让场景更空旷但不失推进感。",
-    score: 86,
-    notesAdded: 12,
-    notesChanged: 8,
-    notesDeleted: 0,
-    loopScore: "良好",
-    supported: true,
-    sourceMode: "goal",
-    changeSet: {
-      id: "candidate-b",
-      summary: "增加探索感",
-      operations: [{ type: "insert_notes", trackId: "track-bass", notes: [
-        { pitch: 43, startTick: Math.round(PPQ * 24.5), durationTicks: PPQ, velocity: 72 },
-        { pitch: 47, startTick: PPQ * 26, durationTicks: Math.round(PPQ * 0.8), velocity: 68 },
-        { pitch: 48, startTick: Math.round(PPQ * 27.5), durationTicks: Math.round(PPQ * 1.2), velocity: 75 },
-      ] }],
-      estimatedAffectedNotes: 3,
-    },
-  },
-];
-
-const modeMeta: Record<AgentMode, { label: string; short: string; description: string }> = {
-  research: { label: "调研", short: "只读", description: "只分析工程，不产生任何修改。" },
-  plan: { label: "计划", short: "预览", description: "提出操作方案和差异，但不写入工程。" },
-  goal: { label: "目标", short: "可编辑", description: "生成受约束的候选，确认后写入工程。" },
-};
-
-/** 依据工程音符的实际长度计算应显示的小节数：至少 16，末尾留 4 小节余量。 */
-const computeBarCount = (tracks: { notes: Array<{ startTick: number; durationTicks: number }> }[], ppq: number): number => {
-  const maxTick = tracks.reduce(
-    (maximum, track) => Math.max(maximum, track.notes.reduce(
-      (trackMax, note) => Math.max(trackMax, note.startTick + note.durationTicks),
-      0,
-    )),
-    0,
-  );
-  const bars = Math.ceil(maxTick / (BEATS_PER_BAR * ppq));
-  return Math.max(16, bars + 4);
-};
-
-const projectToTracks = (project: MidiProject): MidiTrack[] => project.tracks.map((track, index) => ({
-  id: track.id,
-  name: track.name,
-  role: track.role,
-  color: TRACK_COLORS[index % TRACK_COLORS.length],
-  channel: track.channel,
-  program: track.program,
-  muted: track.muted,
-  solo: track.solo,
-  volume: track.volume ?? 1,
-  instrument: track.instrument,
-  loopRegion: track.loopRegion,
-  controllerEvents: track.controllerEvents?.map((event) => ({ ...event })),
-  pitchBends: track.pitchBends?.map((event) => ({ ...event })),
-  notes: track.notes.map((note) => ({ ...note })),
-}));
-
-const APPLICABLE_OPERATION_TYPES = new Set([
-  "insert_notes", "update_notes", "delete_notes", "update_track",
-  "create_track", "delete_track", "set_tempo", "set_time_signature", "set_loop", "clear_loop",
-]);
-
-const candidateFromChangeSet = (changeSet: ProposedChangeSet, index: number, sourceMode: AgentMode, projectVersion?: string): Candidate => {
-  let notesAdded = 0;
-  let notesChanged = 0;
-  let notesDeleted = 0;
-  let supported = changeSet.operations.length > 0;
-  changeSet.operations.forEach((operation) => {
-    if (operation.type === "insert_notes") notesAdded += operation.notes.length;
-    else if (operation.type === "update_notes") notesChanged += operation.changes.length;
-    else if (operation.type === "delete_notes") notesDeleted += operation.noteIds.length;
-    else if (!APPLICABLE_OPERATION_TYPES.has(operation.type)) supported = false;
-  });
-  const validationFailed = changeSet.validation?.some((result) => !result.valid) ?? false;
-  return {
-    id: changeSet.id,
-    title: `${String.fromCharCode(65 + index)} · ${changeSet.summary}`,
-    description: validationFailed
-      ? "候选未通过校验，因此不可应用。"
-      : supported
-        ? `包含 ${changeSet.operations.length} 个原子编辑操作，等待确认后写入工程。`
-        : "包含当前钢琴卷帘尚未支持的工程级操作，仅供审阅。",
-    score: validationFailed ? 0 : Math.max(60, 96 - index * 6),
-    notesAdded,
-    notesChanged,
-    notesDeleted,
-    loopScore: validationFailed ? "未通过" : "已校验",
-    changeSet,
-    supported: supported && !validationFailed,
-    sourceMode,
-    projectVersion,
-  };
-};
-
-const toProjectPayload = (
-  title: string,
-  ppq: number,
-  tempo: number,
-  timeSigNumerator: number,
-  timeSigDenominator: number,
-  tracks: MidiTrack[],
-  metadata: ProjectMetadata | null,
-  instrumentLibrary: InstrumentLibrarySummary[],
-  projectInstruments: ProjectInstrument[],
-): RendererProjectPayload => ({
-  ...(metadata ? {
-    id: metadata.id,
-    tempoMap: [
-      { tick: 0, bpm: tempo },
-      ...metadata.tempoMap.filter((event) => event.tick !== 0).map((event) => ({ ...event })),
-    ],
-    timeSignatures: [
-      { tick: 0, numerator: timeSigNumerator, denominator: timeSigDenominator },
-      ...metadata.timeSignatures.filter((event) => event.tick !== 0).map((event) => ({ ...event })),
-    ],
-    loopRegion: metadata.loopRegion ? { ...metadata.loopRegion } : null,
-    revisions: metadata.revisions.map((revision) => ({ ...revision })),
-    agentSessions: metadata.agentSessions.map((session) => ({
-      ...session,
-      acceptedChangeSetIds: [...session.acceptedChangeSetIds],
-    })),
-  } : {}),
-  title,
-  ppq,
-  tempo,
-  tracks: tracks.map(({ color: _color, ...track }) => ({
-    ...track,
-    notes: track.notes.map((note) => ({ ...note })),
-  })),
-  instruments: buildProjectInstruments(tracks, instrumentLibrary, projectInstruments),
-});
-
-const validateNote = (note: MidiNote) =>
-  typeof note.id === "string" && note.id.trim().length > 0
-  && Number.isInteger(note.pitch) && note.pitch >= 0 && note.pitch <= 127
-  && Number.isInteger(note.startTick) && note.startTick >= 0
-  && Number.isInteger(note.durationTicks) && note.durationTicks > 0
-  && Number.isInteger(note.velocity) && note.velocity >= 1 && note.velocity <= 127;
-
-function applyNoteChangeSet(current: MidiTrack[], changeSet: ProposedChangeSet): ApplyResult {
-  const work = cloneTracks(current);
-  const result: ApplyResult = { tracks: work };
-  const knownIds = new Set(work.flatMap((track) => track.notes.map((note) => note.id)));
-
-  const findTrack = (trackId: string): MidiTrack => {
-    const track = work.find((item) => item.id === trackId);
-    if (!track) throw new Error(`候选引用了不存在的轨道 ${trackId}。`);
-    return track;
-  };
-
-  for (const operation of changeSet.operations) {
-    switch (operation.type) {
-      case "insert_notes": {
-        const track = findTrack(operation.trackId);
-        const inserted = operation.notes.map((input) => {
-          const id = input.id ?? uid("agent-note");
-          const note: MidiNote = { ...input, id };
-          if (knownIds.has(id)) throw new Error(`候选包含重复音符 ID ${id}。`);
-          if (!validateNote(note)) throw new Error("候选包含越界或无效的音符数据。");
-          knownIds.add(id);
-          return note;
-        });
-        track.notes.push(...inserted);
-        break;
-      }
-      case "update_notes": {
-        const track = findTrack(operation.trackId);
-        for (const change of operation.changes) {
-          const noteIndex = track.notes.findIndex((note) => note.id === change.noteId);
-          if (noteIndex < 0) throw new Error(`候选引用了不存在的音符 ${change.noteId}。`);
-          const updated = { ...track.notes[noteIndex], ...change };
-          delete (updated as MidiNote & { noteId?: string }).noteId;
-          if (!validateNote(updated)) throw new Error("候选修改后产生了无效音符。");
-          track.notes[noteIndex] = updated;
-        }
-        break;
-      }
-      case "delete_notes": {
-        const track = findTrack(operation.trackId);
-        const missing = operation.noteIds.find((noteId) => !track.notes.some((note) => note.id === noteId));
-        if (missing) throw new Error(`候选引用了不存在的音符 ${missing}。`);
-        const deleting = new Set(operation.noteIds);
-        track.notes = track.notes.filter((note) => !deleting.has(note.id));
-        operation.noteIds.forEach((noteId) => knownIds.delete(noteId));
-        break;
-      }
-      case "update_track": {
-        const track = findTrack(operation.trackId);
-        const changes = { ...operation.changes };
-        if (changes.instrument === null) {
-          delete changes.instrument;
-          track.instrument = undefined;
-        }
-        // controllerEvents / pitchBends：提供即替换整轨事件数组（null/[] = 清空），id 由应用层生成。
-        if (changes.controllerEvents !== undefined) {
-          track.controllerEvents = changes.controllerEvents === null ? [] : normalizeCcEvents(changes.controllerEvents);
-          delete changes.controllerEvents;
-        }
-        if (changes.pitchBends !== undefined) {
-          track.pitchBends = changes.pitchBends === null ? [] : normalizePitchBends(changes.pitchBends);
-          delete changes.pitchBends;
-        }
-        Object.assign(track, changes);
-        break;
-      }
-      case "create_track": {
-        const input = operation.track;
-        const id = input.id ?? uid("track");
-        if (work.some((track) => track.id === id)) throw new Error(`候选包含重复轨道 ID ${id}。`);
-        const usedChannels = new Set(work.map((track) => track.channel));
-        const channel = input.channel
-          ?? (input.role === "drums" ? 9 : Array.from({ length: 16 }, (_, index) => index).find((candidate) => candidate !== 9 && !usedChannels.has(candidate)) ?? 0);
-        work.push({
-          id,
-          name: input.name.trim() || "Track",
-          role: input.role ?? "other",
-          color: TRACK_COLORS[work.length % TRACK_COLORS.length],
-          channel,
-          program: input.program ?? 0,
-          muted: input.muted ?? false,
-          solo: input.solo ?? false,
-          volume: input.volume,
-          instrument: input.instrument ?? undefined,
-          loopRegion: input.loopRegion,
-          controllerEvents: input.controllerEvents === undefined ? undefined : normalizeCcEvents(input.controllerEvents),
-          pitchBends: input.pitchBends === undefined ? undefined : normalizePitchBends(input.pitchBends),
-          notes: (input.notes ?? []).map((note) => ({
-            ...note,
-            id: note.id ?? uid("agent-note"),
-          })),
-        });
-        break;
-      }
-      case "delete_track": {
-        findTrack(operation.trackId);
-        const kept = work.filter((track) => track.id !== operation.trackId);
-        work.splice(0, work.length, ...kept);
-        break;
-      }
-      case "set_tempo":
-        if (operation.tick === 0) {
-          result.tempo = operation.bpm;
-        } else {
-          result.tempoMap = upsertTempoEvent(result.tempoMap ?? [], operation.tick, operation.bpm);
-        }
-        break;
-      case "set_time_signature":
-        if (operation.tick === 0) {
-          result.timeSigNumerator = operation.numerator;
-          result.timeSigDenominator = operation.denominator;
-        } else {
-          result.timeSignatures = upsertTimeSignature(result.timeSignatures ?? [], operation);
-        }
-        break;
-      case "set_loop":
-        result.loopRegion = { startTick: operation.startTick, endTick: operation.endTick };
-        break;
-      case "clear_loop":
-        result.loopRegion = null;
-        break;
-      default:
-        throw new Error(`暂不支持 ${(operation as { type?: unknown }).type} 操作。`);
-    }
-  }
-
-  return result;
-}
-
-function upsertTempoEvent(map: TempoEvent[], tick: number, bpm: number): TempoEvent[] {
-  return [...map.filter((event) => event.tick !== tick), { tick, bpm }].sort((a, b) => a.tick - b.tick);
-}
-
-function upsertTimeSignature(
-  signatures: TimeSignatureEvent[],
-  sig: { tick: number; numerator: number; denominator: number },
-): TimeSignatureEvent[] {
-  return [...signatures.filter((event) => event.tick !== sig.tick), { ...sig }].sort((a, b) => a.tick - b.tick);
-}
-
-/** 按 tick 合并两批事件（后者覆盖前者），按 tick 升序。 */
-function mergeEventsByTick<T extends { tick: number }>(existing: T[], incoming: T[]): T[] {
-  const byTick = new Map<number, T>();
-  for (const event of existing) byTick.set(event.tick, event);
-  for (const event of incoming) byTick.set(event.tick, event);
-  return [...byTick.values()].sort((a, b) => a.tick - b.tick);
-}
-
-function subscriptionSourceLabel(source: SubscriptionSummary["source"]): string {
-  if (source === "pi") return "Pi";
-  if (source === "cc-switch") return "CC Switch";
-  if (source === "preset") return "预设";
-  return "手动";
-}
-
-function Icon({ name, size = 16 }: { name: string; size?: number }) {
-  const paths: Record<string, string> = {
-    play: "M7 5v14l11-7z",
-    pause: "M7 5h4v14H7zm7 0h4v14h-4z",
-    stop: "M6 6h12v12H6z",
-    undo: "M9 7 4 12l5 5v-3h5a5 5 0 0 0 5-5 7 7 0 0 0-.3-2A7 7 0 0 1 14 11H9z",
-    redo: "m15 7 5 5-5 5v-3h-5a5 5 0 0 1-5-5 7 7 0 0 1 .3-2A7 7 0 0 0 10 11h5z",
-    pointer: "m7 3 10 9-5 1 3 6-2 1-3-6-3 4z",
-    pencil: "m5 16-1 4 4-1L19 8l-3-3zM14 7l3 3",
-    plus: "M12 5v14M5 12h14",
-    settings: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8m8 4 2-1-2-4-2 1-2-1-1-3H9l-1 3-2 1-2-1-2 4 2 1v2l-2 1 2 4 2-1 2 1 1 3h6l1-3 2-1 2 1 2-4-2-1v-2z",
-    download: "M12 3v12m-5-5 5 5 5-5M5 20h14",
-    folder: "M3 6h7l2 2h9v11H3z",
-    spark: "m12 2 1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z",
-    send: "m4 4 17 8-17 8 3-7 8-1-8-1z",
-    close: "m6 6 12 12m0-12L6 18",
-    trash: "M5 7h14M9 7V4h6v3m-8 0 1 13h8l1-13",
-    lock: "M7 11h10v9H7zm2 0V8a3 3 0 0 1 6 0v3",
-    check: "m5 12 4 4L19 6",
-    warning: "M12 3 2.5 20h19zM12 9v5m0 3h.01",
-    cloud: "M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 9a4.5 4.5 0 0 0 1 9z",
-    chart: "M5 19V9m7 10V5m7 14v-7",
-    music: "M9 18V6l10-2v12M9 9l10-2M6 20a3 2 0 1 0 0-4 3 2 0 0 0 0 4m10-2a3 2 0 1 0 0-4 3 2 0 0 0 0 4",
-    plugin: "M9 3v4H5v4H2v4h3v4h4v3h4v-3h4v-4h3v-4h-3V7h-4V3z",
-    panel: "M4 5h16v14H4zM15 5v14m2-10h1m-1 3h1m-1 3h1",
-  };
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d={paths[name] ?? paths.spark} />
-    </svg>
-  );
-}
-
-/** 应用内菜单项列表（递归渲染子菜单；「最近打开项目」由运行时 recentProjects 填充）。 */
 function MenuItemList({
   items,
   recentProjects,
@@ -3316,36 +2750,20 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
       </header>
 
       {environmentMessages.length > 0 && (
-        <section className="environment-alert" role="alert" aria-live="polite">
-          <Icon name="warning" />
-          <div>
-            <strong>{environmentMessages.map((issue) => issue.message).join("；")}</strong>
-            <span>{environmentMessages.map((issue) => issue.instruction).join(" ")}</span>
-          </div>
-          <div className="environment-alert-actions">
-            {environmentMessages.some((issue) => issue.action === "open-shell-settings") && (
-              <button onClick={openShellSettings}>配置 Shell</button>
-            )}
-            {environmentMessages.some((issue) => issue.action === "open-provider-settings") && (
-              <button onClick={() => { setSettingsSection("providers"); setSettingsOpen(true); }}>配置供应商</button>
-            )}
-          </div>
-          <button disabled={environmentBusy} onClick={() => void refreshEnvironment()}>{environmentBusy ? "检测中…" : "重新检测"}</button>
-        </section>
+        <EnvironmentAlertBanner
+          issues={environmentMessages}
+          busy={environmentBusy}
+          onConfigureShell={openShellSettings}
+          onConfigureProviders={() => { setSettingsSection("providers"); setSettingsOpen(true); }}
+          onRefresh={() => void refreshEnvironment()}
+        />
       )}
 
       {showInstrumentWarning && (
-        <section className="instrument-alert" role="alert" aria-live="polite">
-          <Icon name="warning" />
-          <div>
-            <strong>尚未配置音源</strong>
-            <span>为获得真实音色试听，请在设置 → 音源 中「添加」工程音源，或把音源文件放入系统级音源库目录（打开文件夹）后扫描；未配置时轨道使用默认振荡器。</span>
-          </div>
-          <div className="instrument-alert-actions">
-            <button onClick={() => { setSettingsSection("sound"); setSettingsOpen(true); }}>配置音源</button>
-          </div>
-          <button className="instrument-alert-close" onClick={dismissInstrumentWarning} aria-label="关闭音源提示"><Icon name="close" size={12} /></button>
-        </section>
+        <InstrumentAlertBanner
+          onConfigure={() => { setSettingsSection("sound"); setSettingsOpen(true); }}
+          onDismiss={dismissInstrumentWarning}
+        />
       )}
 
       <section className="transport" aria-label="播放控制">
@@ -3546,22 +2964,19 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           )}
         </aside>
 
-        <div
-          className={`workspace-resizer tracks-resizer ${resizingPane === "tracks" ? "is-resizing" : ""}`}
-          role="separator"
-          tabIndex={0}
-          aria-label="调整音轨面板宽度"
-          aria-controls="tracks-panel"
-          aria-orientation="vertical"
-          aria-valuemin={WORKSPACE_LAYOUT_LIMITS.tracksMin}
-          aria-valuemax={Math.round(tracksWidthMax)}
-          aria-valuenow={workspaceLayout.tracksWidth}
-          onKeyDown={(event) => resizeWorkspaceWithKeyboard("tracks", event)}
-          onPointerDown={(event) => beginWorkspaceResize("tracks", event)}
+        <PaneResizer
+          pane="tracks"
+          resizerClass="tracks-resizer"
+          ariaLabel="调整音轨面板宽度"
+          ariaControls="tracks-panel"
+          resizing={resizingPane === "tracks"}
+          min={WORKSPACE_LAYOUT_LIMITS.tracksMin}
+          max={tracksWidthMax}
+          value={workspaceLayout.tracksWidth}
+          onKeyboardResize={resizeWorkspaceWithKeyboard}
+          onBeginResize={beginWorkspaceResize}
           onPointerMove={moveWorkspaceResize}
           onPointerUp={endWorkspaceResize}
-          onPointerCancel={endWorkspaceResize}
-          onLostPointerCapture={endWorkspaceResize}
         />
 
         <section className="editor-panel">
@@ -3593,23 +3008,20 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
           </footer>
         </section>
 
-        <div
-          className={`workspace-resizer agent-resizer ${resizingPane === "agent" ? "is-resizing" : ""}`}
-          role="separator"
-          tabIndex={workspaceLayout.agentHidden ? -1 : 0}
+        <PaneResizer
+          pane="agent"
+          resizerClass="agent-resizer"
+          ariaLabel="调整 Agent 面板宽度"
+          ariaControls="agent-panel"
+          resizing={resizingPane === "agent"}
+          min={WORKSPACE_LAYOUT_LIMITS.agentMin}
+          max={agentWidthMax}
+          value={workspaceLayout.agentWidth}
           hidden={workspaceLayout.agentHidden}
-          aria-label="调整 Agent 面板宽度"
-          aria-controls="agent-panel"
-          aria-orientation="vertical"
-          aria-valuemin={WORKSPACE_LAYOUT_LIMITS.agentMin}
-          aria-valuemax={Math.round(agentWidthMax)}
-          aria-valuenow={workspaceLayout.agentWidth}
-          onKeyDown={(event) => resizeWorkspaceWithKeyboard("agent", event)}
-          onPointerDown={(event) => beginWorkspaceResize("agent", event)}
+          onKeyboardResize={resizeWorkspaceWithKeyboard}
+          onBeginResize={beginWorkspaceResize}
           onPointerMove={moveWorkspaceResize}
           onPointerUp={endWorkspaceResize}
-          onPointerCancel={endWorkspaceResize}
-          onLostPointerCapture={endWorkspaceResize}
         />
 
         <aside id="agent-panel" className="agent-panel" hidden={workspaceLayout.agentHidden}>
@@ -4321,12 +3733,7 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
               )}
 
               {settingsSection === "plugins" && (
-                <div className="settings-pane">
-                  <section className="settings-group">
-                    <div className="settings-group-heading"><div><strong>插件管理</strong><span>用于扩展 Agent 工具、MIDI 处理和音源能力。</span></div><span className="availability-badge preview">规划中</span></div>
-                  </section>
-                  <div className="settings-empty"><Icon name="plugin" size={24} /><strong>插件系统尚未接入</strong><p>当前版本不会扫描或执行第三方插件。插件清单、Manifest、权限和启停功能尚待实现。</p></div>
-                </div>
+                <PluginsPane />
               )}
 
               <div className="modal-actions settings-actions"><button className="candidate-secondary" onClick={() => setSettingsOpen(false)}>关闭</button></div>
@@ -4335,107 +3742,48 @@ export default function App({ initialAppearance, themePresets }: AppProps) {
         </div>
       )}
       {migratePrompt && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMigratePrompt(null); }}>
-          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="migrate-title">
-            <span className="modal-kicker">SYSTEM INSTRUMENT PATH</span>
-            <h3 id="migrate-title">更改系统音源目录</h3>
-            <p className="settings-intro">要把现有音源从当前目录同步迁移到新目录吗？</p>
-            <div className="shell-path-field">
-              <span>当前</span>
-              <code className="migrate-path">{migratePrompt.from}</code>
-            </div>
-            <div className="shell-path-field">
-              <span>新目录</span>
-              <code className="migrate-path">{migratePrompt.to}</code>
-            </div>
-            <p className="shell-settings-note">「迁移音源」会把文件移动到新目录并更新扫描缓存；「仅更改路径」只切换扫描目录，不移动文件。</p>
-            <div className="modal-actions">
-              <button className="candidate-secondary" onClick={() => setMigratePrompt(null)}>取消</button>
-              <button className="candidate-secondary" onClick={() => void confirmSystemPathChange(false)}>仅更改路径</button>
-              <button className="primary-button" onClick={() => void confirmSystemPathChange(true)}>迁移音源</button>
-            </div>
-          </section>
-        </div>
+        <MigratePathDialog
+          from={migratePrompt.from}
+          to={migratePrompt.to}
+          onCancel={() => setMigratePrompt(null)}
+          onChangeOnly={() => void confirmSystemPathChange(false)}
+          onMigrate={() => void confirmSystemPathChange(true)}
+        />
       )}
       {windowChoice && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setWindowChoice(null); }}>
-          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="window-choice-title">
-            <span className="modal-kicker">PROJECT TARGET</span>
-            <h3 id="window-choice-title">在哪里打开？</h3>
-            <p className="settings-intro">
-              {windowChoice === "new-project" ? "新建项目" : windowChoice === "open-project" ? "打开项目" : "导入 MIDI"}
-              ：在当前窗口进行，还是另开一个新窗口？
-            </p>
-            <div className="modal-actions">
-              <button className="candidate-secondary" onClick={() => setWindowChoice(null)}>取消</button>
-              <button className="candidate-secondary" onClick={() => confirmWindowChoice(windowChoice, "current")}>当前窗口</button>
-              <button className="primary-button" onClick={() => confirmWindowChoice(windowChoice, "new")}>新窗口</button>
-            </div>
-          </section>
-        </div>
+        <WindowChoiceDialog
+          intent={windowChoice}
+          onCancel={() => setWindowChoice(null)}
+          onChoose={confirmWindowChoice}
+        />
       )}
       {missingProject && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMissingProject(null); }}>
-          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="missing-project-title">
-            <span className="modal-kicker">PROJECT NOT FOUND</span>
-            <h3 id="missing-project-title">最近项目文件不存在或无法访问</h3>
-            <p className="settings-intro">
-              工程可能已被移动或删除（已从最近项目列表移除）。请选择接下来如何处理。
-            </p>
-            <p className="settings-intro mono-path">{missingProject.path}</p>
-            <div className="modal-actions">
-              <button className="candidate-secondary" onClick={() => setMissingProject(null)}>取消</button>
-              <button className="candidate-secondary" onClick={() => { setMissingProject(null); applyNewProject(); }}>新建项目</button>
-              <button className="candidate-secondary" onClick={() => { setMissingProject(null); void handleOpenProject(); }}>打开项目</button>
-              <button className="primary-button" onClick={() => void magent?.closeWindow()}>关闭</button>
-            </div>
-          </section>
-        </div>
+        <MissingProjectDialog
+          path={missingProject.path}
+          onCancel={() => setMissingProject(null)}
+          onNewProject={() => { setMissingProject(null); applyNewProject(); }}
+          onOpenProject={() => { setMissingProject(null); void handleOpenProject(); }}
+          onCloseWindow={() => void magent?.closeWindow()}
+        />
       )}
       {pendingUnsaved && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingUnsaved(null); }}>
-          <section className="modal migrate-modal" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title">
-            <span className="modal-kicker">UNSAVED CHANGES</span>
-            <h3 id="unsaved-title">未保存的更改</h3>
-            <p className="settings-intro">当前工程有未保存的改动，是否保存后再继续？</p>
-            <div className="modal-actions">
-              <button className="candidate-secondary" onClick={() => setPendingUnsaved(null)}>取消</button>
-              <button className="candidate-secondary" onClick={() => void performPendingAction(false)}>不保存</button>
-              <button className="primary-button" onClick={() => void performPendingAction(true)}>保存并继续</button>
-            </div>
-          </section>
-        </div>
+        <UnsavedChangesDialog
+          onCancel={() => setPendingUnsaved(null)}
+          onDiscard={() => void performPendingAction(false)}
+          onSaveAndContinue={() => void performPendingAction(true)}
+        />
       )}
       {exportDialog && (
-        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !exportBusy) setExportDialog(null); }}>
-          <section className="modal migrate-modal" role="dialog" aria-modal="true" aria-labelledby="export-audio-title">
-            <span className="modal-kicker">AUDIO EXPORT</span>
-            <h3 id="export-audio-title">导出{exportDialog === "ogg" ? " OGG" : " WAV"} 音频</h3>
-            <p className="settings-intro">
-              离线渲染完整工程为{exportDialog === "ogg" ? " Ogg Vorbis（.ogg）" : " WAV（.wav）"}。
-              包含 SoundFont 采样、SFZ 采样与振荡器回退轨道，时长随最长轨道并附加释放尾音。
-            </p>
-            <label className="settings-row">
-              <div><strong>采样率</strong><span>越高保真越好、文件越大。</span></div>
-              <select value={exportSampleRate} onChange={(event) => setExportSampleRate(Number(event.target.value) as ExportSampleRate)}>
-                {EXPORT_SAMPLE_RATES.map((rate) => <option key={rate} value={rate}>{rate} Hz</option>)}
-              </select>
-            </label>
-            <label className="settings-row">
-              <div>
-                <strong>仅导出循环区</strong>
-                <span>有循环区的轨道从头播放、进入循环区后循环至曲末；无循环区轨道整轨导出。</span>
-              </div>
-              <input type="checkbox" checked={exportLoopOnly} onChange={(event) => setExportLoopOnly(event.target.checked)} />
-            </label>
-            <div className="modal-actions">
-              <button className="candidate-secondary" disabled={exportBusy} onClick={() => setExportDialog(null)}>取消</button>
-              <button className="primary-button" disabled={exportBusy} onClick={() => void handleExportAudio(exportDialog, exportSampleRate)}>
-                {exportBusy ? "正在渲染并编码…" : "导出"}
-              </button>
-            </div>
-          </section>
-        </div>
+        <ExportAudioModal
+          format={exportDialog}
+          sampleRate={exportSampleRate}
+          loopOnly={exportLoopOnly}
+          busy={exportBusy}
+          onSampleRateChange={(rate) => setExportSampleRate(rate)}
+          onLoopOnlyChange={setExportLoopOnly}
+          onCancel={() => setExportDialog(null)}
+          onExport={(format, sampleRate) => void handleExportAudio(format, sampleRate)}
+        />
       )}
       {midiPanel.open && (
         <MidiPropertiesPanel

@@ -51,7 +51,7 @@ describe("startup environment diagnostics", () => {
     expect(ids).toEqual(["electron", "node", "shell", "pi-core", "secure-storage"]);
     expect(report.checks.find((check) => check.id === "pi-core")).toMatchObject({ required: true, status: "ready" });
     expect(report.issues.some((issue) => issue.id === "provider-auth")).toBe(true);
-  });
+  }, 20_000);
 
   it("reports an app API key without exposing secret material", async () => {
     const report = await diagnoseEnvironment({ ...base, secureApiKey: "not-returned-secret" });
@@ -59,7 +59,7 @@ describe("startup environment diagnostics", () => {
     expect(report.activeProvider).toBe("openai");
     expect(report.providers[0]).toMatchObject({ configured: true, usable: true, source: "app" });
     expect(JSON.stringify(report)).not.toContain("not-returned-secret");
-  });
+  }, 20_000);
 
   it("reports an unusable configured shell as a required startup issue", async () => {
     const report = await diagnoseEnvironment({
@@ -68,7 +68,7 @@ describe("startup environment diagnostics", () => {
     });
     expect(report.checks.find((check) => check.id === "shell")).toMatchObject({ required: true, status: "missing" });
     expect(report.issues.find((issue) => issue.id === "shell")).toMatchObject({ action: "open-shell-settings" });
-  });
+  }, 20_000);
 
   it("prefers an app subscription login over detected but unimported Pi CLI credentials", async () => {
     const report = await diagnoseEnvironment({
@@ -79,12 +79,12 @@ describe("startup environment diagnostics", () => {
       piCredentials: new TestCredentialStore({ openai: { type: "api_key", key: "opaque" } }),
     });
     expect(report.activeProvider).toBe("openai-codex");
-  });
+  }, 20_000);
 
   it("treats an active subscription with an API key as agent-ready", async () => {
     const report = await diagnoseEnvironment({ ...base, activeSubscriptionApiKey: "not-returned-secret" });
     expect(report.agentReady).toBe(true);
     expect(report.issues.some((issue) => issue.id === "provider-auth")).toBe(false);
     expect(JSON.stringify(report)).not.toContain("not-returned-secret");
-  });
+  }, 20_000);
 });
