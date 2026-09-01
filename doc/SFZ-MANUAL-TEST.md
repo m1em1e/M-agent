@@ -1,6 +1,6 @@
 # SFZ 功能手动测试方案
 
-> 适用版本：M Agent 0.6.0（Windows 开发态）。面向真实音源试听与端到端链路的**手动**验证；
+> 适用版本：M Agent 0.6.1（Windows 开发态）。面向真实音源试听与端到端链路的**手动**验证；
 > 解析器/选择器逻辑已有单测覆盖（`tests/audio/sfz-parser.test.ts`、`tests/main/soundfont-parser.test.ts` 等），
 > 本方案不重复其断言，只补「听感与整链路」。
 > 功能声明依据：`doc/IMPLEMENTED.md` 第 6 / 10 / 11 节、「SFZ v1/v2 覆盖情况」见 `doc/INCOMPLETE.md`。
