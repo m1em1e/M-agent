@@ -92,6 +92,11 @@
 - Agent 取消（2026-08-16）：去掉 `agent:run` 固定墙钟超时（长任务不再被打断），新增 `agent:cancel` IPC 与「取消」按钮；
   中止/超时诊断附带工具调用计数与最近序列；子 Skill 超时可在「设置 → 通用 → 对话」配置（秒，留空不限时）；瞬时流/网络错误仍自动重试一次。
 - Agent 请求超时不设固定墙钟：由用户取消、Token/轮次预算与（可配置的）子 Skill 超时兜底；`cleanAgentError` 剥离 IPC 封装并提取供应商错误 message。
+- OpenCode Go 会话头（2026-10-15）：网关要求推理请求携带 `x-opencode-session`，缺失时直接返回 400
+  `MissingSessionID`（“Request is missing x-opencode-session and cannot be routed efficiently”），此前该类订阅的
+  Agent 运行全部被拒。新增 `src/core/agent/provider-headers.ts`（只匹配 `opencode.ai` 主机），内核模型请求统一
+  附加本次运行的 `requestId` 作为会话 ID，并按官方要求以 `m-agent` 作为 User-Agent 标识客户端（覆盖
+  `chat/completions` 与 `responses` 两个端点）；其他供应商请求头保持不变。
 
 ## 4. 候选应用与撤销
 
@@ -218,3 +223,13 @@
   对话设置持久化、Pi 思考摘要、Pi 离线调研链路。
 - P0-1 大型工程分析栈溢出已修复（`pitchRange` 单次循环，130,000 音符回归测试）；P0-2 Electron 已升级到 43.4.0（`npm audit` 归零）。
 - `package:win` 已生成 NSIS 安装包（约 96 MB，安装态图标与 `build/icon.ico` SHA-256 一致）；`package:mac` / `package:linux` 三端发布打包已验证。
+- 三端实机发布验证（用户实测）：在 Windows / macOS / Linux 的**干净环境**（无 npm / Node / Pi CLI）下完成
+  「打包 → 安装 → 运行」并正常产生曲子——覆盖离线演示生成、Agent 云端 Skill 嵌套编曲（song-arranger → harmony）、
+  两级音源库加载、MIDI 多轨编辑/播放与 WAV / OGG 音频导出。安装包当前**尚未代码签名/公证**（见 [INCOMPLETE.md](INCOMPLETE.md)）。
+- OpenCode Go 会话头修复（2026-10-15）：对 `https://opencode.ai/zen/go/v1` 实测——不带 `x-opencode-session` 时
+  `chat/completions` 与 `responses` 均返回 400 `MissingSessionID`（响应体即上面的报错原文），带上该头后请求继续
+  进入鉴权（无效 Key 返回 401）；`GET /v1/models` 不需要该头（模型列表拉取不受影响）。
+  `tests/agent/provider-headers.test.ts` 用桩 fetch 断言内核真实请求携带会话头（本次 `requestId`）与 `m-agent`
+  User-Agent（覆盖 `chat/completions` 与 `responses` 两个端点），且非 OpenCode 供应商不改写请求头
+  （去掉注入即失败，非空测试）；`npm run typecheck`、`npm test`（49 文件 / 398 项通过，云端真实 Key 用例照常跳过）
+  与 `npm run build` 通过。

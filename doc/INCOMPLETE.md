@@ -21,8 +21,10 @@
 - 后续需要 Shell 的主进程功能必须复用 `runConfiguredShellCommand`，不得用 `cmd.exe`、`shell: true` 或向 Renderer/Agent 暴露任意命令 IPC。
 
 ### 发布与打包验证
-- 无 npm/Node/Pi CLI 的干净 Windows 环境验证未做。
-- 代码签名（Windows/macOS 公证）与三端发布验证未完成。
+- 已由用户在三端干净环境（无 npm/Node/Pi CLI）完成「打包 → 安装 → 运行 → 生成曲子」验证
+  （Windows / macOS / Linux；覆盖离线演示、Agent 云端 Skill 嵌套编曲、两级音源库、MIDI 编辑/播放、WAV/OGG 导出），
+  详见 [IMPLEMENTED.md](IMPLEMENTED.md)「验证记录」。
+- **仅剩**：代码签名（Windows/macOS 公证）与签名/公证后分发验证未完成（安装包当前未签名）。
 
 ### 音源系统完善
 - **预设搜索**：设置 → 音源 列表与轨道选择器平铺全部 preset，大型音源库下拉较长；可复用供应商预设搜索模式。
@@ -125,9 +127,7 @@ WAV / OGG(Vorbis) 音频导出已实现（见 IMPLEMENTED.md 第 10 节）。仍
 
 ## 明确不应宣称完成的事项
 
-- 三端安装包已完成签名和发布验证。
+- 三端安装包已完成代码签名与公证（签名/公证前的打包 → 安装 → 运行已由用户在三端干净环境验证通过，见 [IMPLEMENTED.md](IMPLEMENTED.md) 验证记录）。
 - 真实 OpenAI 云端链路已通过自动化端到端回归测试（应用内已可实际使用自定义供应商，但自动化真实请求测试未覆盖）。
 - 大型 MIDI 工程已稳定支持。
 - 目标模式已有完整成本预算和音乐评分系统。
-- 两级音源库已在三平台真实桌面交互中完整验证（目前仅 macOS 冒烟通过）。
-- Skill 嵌套调用已在真实云端模型上端到端验证（目前仅离线脚本化 tool loop 与单测覆盖）。
