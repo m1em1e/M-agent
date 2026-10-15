@@ -30,6 +30,7 @@ import type { SubscriptionApiType, SubscriptionModel } from "../../shared/subscr
 import { DEFAULT_CONTEXT_WINDOW } from "../../shared/subscriptions.js";
 import { validateChangeSet } from "../midi/edits.js";
 import { assertAgentToolAllowed } from "./permissions.js";
+import { openCodeRequestHeaders } from "./provider-headers.js";
 import { parseProposedChangeSet } from "./schema.js";
 import { invokeSkill, type ChildRunKernel } from "./skills/invoke.js";
 import { mergeSkillOperations, type SkillOperationSource } from "./skills/merge.js";
@@ -913,8 +914,12 @@ export async function runPiKernel(request: PiKernelRequest): Promise<PiKernelRes
     },
     streamFn: (model, context, options) => {
       const remainingOutputTokens = Math.max(16, maximumOutputTokens - outputTokens);
+      // OpenCode Go 网关缺少会话头会直接 400（MissingSessionID）；会话 ID 用本次运行的 requestId，
+      // 与 pi-ai 的会话语义（AgentOptions.sessionId）保持一致。其他供应商返回 undefined，不改动请求。
+      const gatewayHeaders = openCodeRequestHeaders({ baseUrl: model.baseUrl, sessionId: request.requestId });
       return runtime.models.streamSimple(model, context, {
         ...options,
+        ...(gatewayHeaders ? { headers: { ...options?.headers, ...gatewayHeaders } } : {}),
         maxTokens: Math.min(model.maxTokens, remainingOutputTokens),
       });
     },
